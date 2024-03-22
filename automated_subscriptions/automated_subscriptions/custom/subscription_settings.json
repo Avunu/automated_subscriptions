@@ -1,0 +1,23 @@
+{
+    "custom_fields": [
+        {
+            "dt": "Subscription Settings",
+            "fieldname": "sb_automated_subscriptions",
+            "fieldtype": "Section Break",
+            "insert_after": "prorate",
+            "module": "Automated Subscriptions"
+        },
+        {
+            "dt": "Subscription Settings",
+            "default": 0,
+            "fieldname": "auto_billing_delay",
+            "fieldtype": "Int",
+            "insert_after": "sb_automated_subscriptions",
+            "label": "Auto-billing Delay",
+            "module": "Automated Subscriptions"
+        }
+    ],
+    "property_setters": [],
+    "sync_on_migrate": 1,
+    "doctype": "Subscription Settings"
+}

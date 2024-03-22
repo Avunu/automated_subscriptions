@@ -17,12 +17,20 @@ def sales_invoice_subscription_payment_request(doc, method=None):
         .where(subscription_plan.name.isin(plan_names))
     ).run()[0][0]
 
-    make_payment_request(
-        dt="Sales Invoice",
+    pr = make_payment_request(
         dn=doc.name,
+        dt="Sales Invoice",
         party_type=subscription.party_type,
         party=subscription.party,
-        recipient_id=doc.contact_email,
+        payment_gateway_account=payment_gateway,
         payment_request_type="Inward",
-        payment_gateway_account=payment_gateway
+        recipient_id=doc.contact_email,
+        return_doc=True
     )
+
+    # set the transaction date to the posting date + auto_billing_delay
+    auto_billing_delay = frappe.db.get_single_value("Subscription Settings", "auto_billing_delay")
+    pr.transaction_date = frappe.utils.add_days(doc.posting_date, auto_billing_delay)
+
+    pr.save(ignore_permissions=True)
+    pr.submit()
