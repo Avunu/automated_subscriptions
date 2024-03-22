@@ -15,7 +15,7 @@ def sales_invoice_subscription_payment_request(doc, method=None):
         .select(subscription_plan.payment_gateway)
         .distinct()
         .where(subscription_plan.name.isin(plan_names))
-    ).run(as_dict=1)[0][0]
+    ).run()[0][0]
 
     make_payment_request(
         dt="Sales Invoice",
