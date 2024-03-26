@@ -5,6 +5,7 @@
             "fieldname": "sb_automated_subscriptions",
             "fieldtype": "Section Break",
             "insert_after": "prorate",
+            "label": "Automated Subscriptions",
             "module": "Automated Subscriptions"
         },
         {
