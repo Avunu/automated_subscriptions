@@ -28,9 +28,12 @@ def sales_invoice_subscription_payment_request(doc, method=None):
         return_doc=True
     )
 
-    # set the transaction date to the posting date + auto_billing_delay
-    auto_billing_delay = frappe.db.get_single_value("Subscription Settings", "auto_billing_delay")
-    pr.transaction_date = frappe.utils.add_days(doc.posting_date, auto_billing_delay)
+    # set the transaction date
+    if subscription.days_until_due:
+        pr.transaction_date = frappe.utils.add_days(doc.posting_date, subscription.days_until_due)
+    else:
+        auto_billing_delay = frappe.db.get_single_value("Subscription Settings", "auto_billing_delay")
+        pr.transaction_date = frappe.utils.add_days(doc.posting_date, auto_billing_delay)
 
     pr.save(ignore_permissions=True)
     pr.submit()
