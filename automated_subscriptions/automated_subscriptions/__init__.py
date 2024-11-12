@@ -16,6 +16,8 @@ def sales_invoice_subscription_payment_request(doc, method=None):
         .distinct()
         .where(subscription_plan.name.isin(plan_names))
     ).run()[0][0]
+    if not payment_gateway:
+        return
 
     pr = make_payment_request(
         dn=doc.name,
