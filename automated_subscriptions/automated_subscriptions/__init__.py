@@ -6,6 +6,10 @@ def sales_invoice_subscription_payment_request(doc, method=None):
     # import a sales invoice and make a payment request
     if not doc.subscription:
         return
+    
+    # if the posting date is not the current date, do not create a payment request
+    if doc.posting_date != frappe.utils.nowdate():
+        return
 
     subscription = frappe.get_doc("Subscription", doc.subscription)
     plan_names = [plan.plan for plan in subscription.plans]
@@ -15,7 +19,7 @@ def sales_invoice_subscription_payment_request(doc, method=None):
         .select(subscription_plan.payment_gateway)
         .distinct()
         .where(subscription_plan.name.isin(plan_names))
-    ).run()[0][0]
+    ).run(pluck="payment_gateway")
     if not payment_gateway:
         return
 
@@ -24,7 +28,7 @@ def sales_invoice_subscription_payment_request(doc, method=None):
         dt="Sales Invoice",
         party_type=subscription.party_type,
         party=subscription.party,
-        payment_gateway_account=payment_gateway,
+        payment_gateway_account=payment_gateway[0],
         payment_request_type="Inward",
         recipient_id=doc.contact_email,
         return_doc=True
