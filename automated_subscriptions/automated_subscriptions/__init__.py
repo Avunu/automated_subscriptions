@@ -1,14 +1,22 @@
 import frappe
-from erpnext.accounts.doctype.payment_request.payment_request import make_payment_request
+from frappe.utils import nowdate
+from erpnext.accounts.doctype.payment_request.payment_request import (
+    make_payment_request,
+)
 
 
 def sales_invoice_subscription_payment_request(doc, method=None):
     # import a sales invoice and make a payment request
     if not doc.subscription:
         return
-    
+
     # if the posting date is not the current date, do not create a payment request
-    if doc.posting_date != frappe.utils.nowdate():
+    if str(doc.posting_date) != str(nowdate()):
+        # debug
+        frappe.log_error(
+            "Posting date mismatch",
+            f"Sales Invoice {doc.name} posting date {doc.posting_date} does not match current date {nowdate()}",
+        )
         return
 
     subscription = frappe.get_doc("Subscription", doc.subscription)
@@ -31,15 +39,21 @@ def sales_invoice_subscription_payment_request(doc, method=None):
         payment_gateway_account=payment_gateway[0],
         payment_request_type="Inward",
         recipient_id=doc.contact_email,
-        return_doc=True
+        return_doc=True,
     )
 
     # set the transaction date
     if subscription.days_until_due:
-        pr.transaction_date = frappe.utils.add_days(doc.posting_date, subscription.days_until_due)
+        pr.transaction_date = frappe.utils.add_days(
+            doc.posting_date, subscription.days_until_due
+        )
     else:
-        auto_billing_delay = frappe.db.get_single_value("Subscription Settings", "auto_billing_delay")
-        pr.transaction_date = frappe.utils.add_days(doc.posting_date, auto_billing_delay)
+        auto_billing_delay = frappe.db.get_single_value(
+            "Subscription Settings", "auto_billing_delay"
+        )
+        pr.transaction_date = frappe.utils.add_days(
+            doc.posting_date, auto_billing_delay
+        )
 
     pr.save(ignore_permissions=True)
     pr.submit()
