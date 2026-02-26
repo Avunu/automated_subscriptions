@@ -1,0 +1,44 @@
+exclude: 'node_modules|.git'
+default_stages: [pre-commit]
+fail_fast: false
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+        files: "automated_subscriptions.*"
+        exclude: ".*json$|.*txt$|.*csv|.*md|.*svg"
+      - id: check-merge-conflict
+      - id: check-ast
+      - id: check-json
+      - id: check-toml
+      - id: check-yaml
+      - id: debug-statements
+
+  # ssort to sort methods source files
+  - repo: https://github.com/bwhmather/ssort
+    rev: 0.16.0
+    hooks:
+      - id: ssort
+        # Exclude auto-generated Frappe DocType files
+        exclude: '/doctype/[^/]+/[^/]+\.py$'
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.3
+    hooks:
+      - id: ruff
+        name: "Run ruff import sorter"
+        args: ["--select=I", "--fix"]
+
+      - id: ruff
+        name: "Run ruff linter"
+
+      - id: ruff-format
+        name: "Run ruff formatter"
+
+
+ci:
+    autoupdate_schedule: weekly
+    skip: []
+    submodules: false
