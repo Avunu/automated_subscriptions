@@ -8,7 +8,7 @@ required_apps = ["erpnext", "payments"]
 
 doc_events = {
 	"Sales Invoice": {
-		"on_submit": "automated_subscriptions.automated_subscriptions.sales_invoice_subscription_payment_request"
+		"on_submit": "automated_subscriptions.automated_subscriptions.custom.sales_invoice.subscription_payment_request"
 	}
 }
 extend_doctype_class = {
