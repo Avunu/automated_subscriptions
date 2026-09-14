@@ -29,6 +29,7 @@ from automated_subscriptions.automated_subscriptions.billing.profile import (
 )
 from automated_subscriptions.automated_subscriptions.billing.runner import (
 	_active_run,
+	_is_due,
 	_run_ctx,
 	run_consolidated_billing,
 )
@@ -224,7 +225,13 @@ class Subscription(BaseSubscription):
 		Consolidating customers are billed by the runner (billing/runner.py), never standalone: the first sub of
 		a party that core's process_all reaches runs the whole party group; the siblings hit the run memo. After
 		a successful run every member falls through to core's process() on a reloaded copy for status
-		maintenance only (billed -> not due). A failed group raises so no member is billed on its own."""
+		maintenance only (billed -> not due); a sub still due after the run (more than one period behind) gets
+		status maintenance only too and waits for the next daily run, as stock bills one period per run. Note
+		that this copy has no `consolidation_current_invoice` flag, so until PR 4's line-aware
+		`get_current_invoice` a sub[k>0] with an older *header* invoice past grace is set Unpaid/Cancelled here
+		exactly as on any later daily run: PR 3 must not go live for a consolidating customer without PR 4.
+		A failed group raises so no member is billed on its own. Core's trailing save() persists the healed
+		period on the delegated path only because the realignment is repeated after the reload."""
 		if self._billing_profile() is not None:
 			self._realign_current_period()
 		if _active_run() is not None:
@@ -239,9 +246,9 @@ class Subscription(BaseSubscription):
 		key = (self.company or get_default_company(), self.party_type, self.party, str(getdate(posting_date)))
 		state = ctx.done.get(key)
 		if state is None:
-			run_consolidated_billing(
-				posting_date, party=self.party, party_type=self.party_type, company=key[0]
-			)
+			# no company filter: a blank-company sub (core's backward-compat case) must be visited and grouped
+			# under the default company, exactly as group_key does; the memo key above uses the same fallback
+			run_consolidated_billing(posting_date, party=self.party, party_type=self.party_type)
 			state = ctx.done.get(key, "ok")  # the runner records "ok"/"failed"; it never re-raises per group
 		if state == "failed":
 			raise ConsolidatedBillingError(
@@ -249,25 +256,86 @@ class Subscription(BaseSubscription):
 					"Consolidated billing for {0} failed earlier in this run; not billing {1} standalone"
 				).format(self.party, self.name)
 			)
-		self.reload()  # the runner saved a different copy of this row
+		self.reload()  # the runner saved a different copy of this row (and discarded the realignment above)
+		if self._billing_profile() is not None:
+			# a member the runner skipped as not due still carries the end stored before the anchor was set;
+			# core's trigger / cap / re-anchor checks below and its trailing save() must see and persist the
+			# aligned one, exactly like the non-consolidating anchored path (PR 2 R2-02 / R7), or an
+			# End-of-period sub fires on the stale end and bills the stub standalone
+			self._realign_current_period()
+		if _is_due(self, posting_date):
+			# The runner billed this party for the run date and advanced the period; the row is still due only
+			# when it was more than one period behind (back-dated insert within validate()'s one-cycle cap, or a
+			# daily-job outage > 1 cycle). Core's generation branch would now bill the next period standalone
+			# (create_invoice sees no active run). Stock bills one period per run: do status maintenance only
+			# and let the next daily run consolidate the next period.
+			self.set_subscription_status(posting_date=posting_date)
+			self.save()
+			return None
 		return super().process(posting_date)  # billed -> not due -> status maintenance only
 
 	def get_current_invoice(self):
-		"""Run-scoped guard: for the rest of the process() call that put this sub's lines on the consolidation
-		sink, the sink *is* the current invoice (core's header-only lookup would return the sub's previous invoice
-		and, past grace with cancel_after_grace, cancel the subscription it just billed). Only ever set on the
-		runner's own doc copies."""
+		"""Run-scoped guard for the runner's own doc copies only: for the rest of that process() call that put
+		this sub's lines on the consolidation sink, the sink *is* the current invoice (core's header-only lookup
+		would return the sub's previous invoice and, past grace with cancel_after_grace, cancel the subscription
+		it just billed). Every other status pass (the delegating copy in process(), later daily runs, desk
+		Fetch Subscription Updates) uses core's header-only lookup until PR 4's line-aware body, which keeps
+		this guard first."""
 		sink = self.flags.get("consolidation_current_invoice")
 		if sink is not None:
 			return sink
 		return super().get_current_invoice()
 
+	def is_current_invoice_generated(self, _current_start_date=None, _current_end_date=None):
+		"""Core keys this on the invoice header link. A consolidated member (sub[k>0]) has no header link, and
+		core's process() skips the period advance on an end_date sub's final period (the `if self.end_date`
+		return branch), so the header rule alone would bill that period again on the next run. Fall back to
+		the sub's own engine line for the period on a live, non-return invoice (the draft sink included, for
+		the in-lock re-check); PR 4 (DECISIONS.md D-10) makes the line window the primary rule. Stock subs
+		whose period advanced normally get core's answer: a line for the *current* period only exists once it
+		was billed."""
+		if super().is_current_invoice_generated(_current_start_date, _current_end_date):
+			return True
+		if self.party_type != "Customer" or not self.name:
+			return False
+		if not (_current_start_date and _current_end_date):
+			_current_start_date, _current_end_date = self._get_subscription_period(
+				date=add_days(self.current_invoice_end, 1)
+			)
+		si = frappe.qb.DocType("Sales Invoice")
+		sii = frappe.qb.DocType("Sales Invoice Item")
+		rows = (
+			frappe.qb.from_(sii)
+			.join(si)
+			.on(si.name == sii.parent)
+			.select(sii.name)
+			.where(
+				(sii.parenttype == "Sales Invoice")
+				& (sii.subscription == self.name)
+				& (si.docstatus < 2)
+				& (si.is_return == 0)
+				& (sii.subscription_period_start >= getdate(_current_start_date))
+				& (sii.subscription_period_start <= getdate(_current_end_date))
+			)
+			.limit(1)
+			.run()
+		)
+		return bool(rows)
+
 	def create_invoice(self, from_date=None, to_date=None, posting_date=None):
 		"""Outside a consolidation run (or for a non-consolidating customer): the standalone invoice. Inside a
 		run: sub[0] creates the sink through core's own create_invoice (submission suppressed), every later sub
-		absorbs its lines into that same draft object; the runner submits it once."""
+		absorbs its lines into that same draft object; the runner submits it once. A sub's *second*
+		create_invoice in one run (core's cancellation arrears) stays standalone, exactly like stock."""
 		run = _active_run()
 		if run is None or not self.is_consolidating():
+			return self._create_standalone_invoice(from_date, to_date, posting_date)
+		if from_date or to_date or any(m.name == self.name for m in run.members):
+			# core's cancel_subscription (cancel_at_period_end / end_date branches of process()) generates a
+			# second, explicitly windowed arrears invoice for the sub whose period invoice already went into
+			# the sink; core produces a separate invoice there and its duplicate-line check
+			# (allow_multiple_items = 0) would reject the same lines twice on one sink, so keep that invoice
+			# standalone exactly like stock
 			return self._create_standalone_invoice(from_date, to_date, posting_date)
 		profile = self._billing_profile()
 		if profile is not None:
@@ -349,6 +417,12 @@ class Subscription(BaseSubscription):
 			existing.add((item["item_code"], description))
 		sink.from_date = min(getdate(sink.from_date), period[0])
 		sink.to_date = max(getdate(sink.to_date), period[1])
+		# core (create_invoice, "Discounts") stamps sub[0]'s fixed additional_discount_amount on the header once;
+		# one standalone invoice per member would subtract it once each, so the sink must carry the sum.
+		# Percentages scale with the total and need no adjustment. Same amount / apply_discount_on / trial
+		# state across members is guaranteed by group_key; the guard mirrors core's is_trialling branch.
+		if flt(self.additional_discount_amount) and not self.is_trialling():
+			sink.discount_amount = flt(sink.discount_amount) + flt(self.additional_discount_amount)
 		sink.save()
 
 	def validate(self):

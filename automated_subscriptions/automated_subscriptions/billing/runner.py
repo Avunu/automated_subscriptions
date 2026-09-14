@@ -11,7 +11,8 @@ then every due sub's own `process()`. Inside the run the mixin's `create_invoice
 `create_invoice` with submission suppressed (the "sink", a saved draft whose header is sub[0]) and absorbs every
 later sub's lines into that same object; `_finalize` widens the header period, re-saves once and submits once.
 A failure rolls the whole group back to the savepoint, logs it and marks the party "failed" in the run memo so
-the delegating `process()` raises instead of billing standalone.
+the delegating `process()` raises instead of billing standalone; that verdict is sticky for the rest of the run
+because one party may split into several groups (§3.2 key) and a later group's success must not clear it.
 
 Replay trap (core semantics, unchanged here): `set_subscription_status` compares the current invoice's due date
 against *today*, not the run's posting date, so replaying old periods (Process Subscription with a past posting
@@ -19,6 +20,7 @@ date) sets Unpaid / Cancelled exactly as stock does. Run migration replays with 
 trust statuses produced by a replay (DECISIONS.md Q-10).
 """
 
+import contextlib
 import hashlib
 from datetime import date
 
@@ -26,6 +28,7 @@ import frappe
 from erpnext import get_default_company
 from erpnext.accounts.doctype.accounting_dimension.accounting_dimension import get_accounting_dimensions
 from frappe import _
+from frappe.query_builder.functions import IfNull
 from frappe.utils import cint, flt, getdate, sbool
 from frappe.utils.file_lock import LockTimeoutError
 from frappe.utils.synchronization import filelock
@@ -39,6 +42,9 @@ GroupKey = tuple
 # (company, party_type, party, effective_posting_date: date, currency, sales_tax_template, cost_center,
 #  dims: tuple, submit_invoice: int, is_trialling: bool, additional_discount_percentage: float,
 #  additional_discount_amount: float, apply_additional_discount: str, days_until_due: int)
+# additional_discount_amount is a *fixed* header amount that core stamps once from sub[0]; equality across the
+# group is necessary but not sufficient for money conservation, so the mixin's _absorb_into adds every later
+# member's amount to the sink header (one standalone invoice per member would subtract it once each).
 
 
 # ---- run context (memo + active group) — on frappe.local, never frappe.flags -------------------------------
@@ -49,8 +55,8 @@ def _run_ctx() -> frappe._dict:
 
 	`active`: None | _dict(key, posting_date, sink, members, dry_run) while a group is being billed.
 	`done`:   {(company, party_type, party, "YYYY-MM-DD"): "ok" | "failed"}; never written by dry runs.
-	Lives on frappe.local (IntegrationTestCase deep-copies frappe.local.flags per class, which would copy a
-	Document held there)."""
+	"failed" is sticky for the rest of the run (see _mark_done). Lives on frappe.local (IntegrationTestCase
+	deep-copies frappe.local.flags per class, which would copy a Document held there)."""
 	ctx = getattr(frappe.local, "consolidated_billing", None)
 	if ctx is None:
 		ctx = frappe.local.consolidated_billing = frappe._dict(active=None, done={})
@@ -61,6 +67,17 @@ def _active_run() -> frappe._dict | None:
 	"""The group being billed right now, without creating the context (stock subs never touch frappe.local)."""
 	ctx = getattr(frappe.local, "consolidated_billing", None)
 	return ctx.active if ctx is not None else None
+
+
+def _mark_done(ctx, memo_key, state: str) -> None:
+	"""The memo is per party (the delegating process() can only compute the party key) while groups are finer
+	(tax template, days_until_due, effective posting date...): once any group of a party failed the party stays
+	"failed" for the run, so the delegating process() of the failed group's members raises instead of billing
+	them standalone. Members of a sibling group that did succeed raise too (no money effect: the runner already
+	billed and saved them; they only miss one status pass)."""
+	if state == "ok" and ctx.done.get(memo_key) == "failed":
+		return
+	ctx.done[memo_key] = state
 
 
 # ---- lock name and group key -------------------------------------------------------------------------------
@@ -83,7 +100,10 @@ def effective_posting_date(sub, run_posting_date) -> date:
 
 
 def group_key(sub, run_posting_date) -> GroupKey:
-	"""Everything core copies from sub[0] onto the invoice header must be equal across the group."""
+	"""Everything core copies from sub[0] onto the invoice header must be equal across the group.
+
+	The fixed additional_discount_amount is the one header value equality does not settle: _absorb_into sums
+	it over the members so the sink subtracts it once per subscription, like standalone billing would."""
 	dims = tuple(sub.get(d) or "" for d in get_accounting_dimensions())
 	currency = frappe.db.get_value("Subscription Plan", sub.plans[0].plan, "currency") if sub.plans else ""
 	return (
@@ -114,8 +134,9 @@ def run_consolidated_billing(
 	"""Bill every due consolidating subscription, one invoice per group; returns one summary per group.
 
 	A group that failed is rolled back, logged and reported in its summary's `errors`; the next party is still
-	visited. A busy party lock raises ConsolidationLocked (a ValidationError) instead: nothing was attempted
-	and the caller must not treat the party as billed."""
+	visited, including when a party's lock is busy (its memo is marked "failed"). A party-scoped call whose
+	lock is busy raises ConsolidationLocked (a ValidationError) instead: nothing was attempted and the caller
+	must not treat the party as billed."""
 	frappe.has_permission("Subscription", "write", throw=True)
 	run_posting_date = getdate(posting_date)  # getdate(None) == today
 	dry_run = bool(sbool(dry_run))
@@ -126,9 +147,11 @@ def run_consolidated_billing(
 	for key, sub_names in groups:
 		try:
 			summary = _run_group(key, sub_names, run_posting_date, dry_run=dry_run, lock_timeout=lock_timeout)
-		except ConsolidationLocked:
-			raise
 		except ConsolidatedBillingError as e:  # one party's failure must not poison the next
+			if party and isinstance(e, ConsolidationLocked):
+				# party-scoped call: nothing else to report; the memo is already "failed" so the delegating
+				# process() sees the raise instead of a silent standalone fallback
+				raise
 			results.append(
 				{
 					"company": key[0],
@@ -162,7 +185,10 @@ def preview_consolidated_billing(
 
 def _candidate_subscriptions(party, party_type, company) -> list[str]:
 	"""Non-cancelled Customer subscriptions whose customer consolidates; ordered so the oldest sub of a party
-	(after PR 7's M1 the surviving parent) is sub[0] and owns the sink's header."""
+	(after PR 7's M1 the surviving parent) is sub[0] and owns the sink's header.
+
+	`company` matches the *effective* company: a blank stored company (core's backward-compat case, the field
+	is not mandatory) bills under the default company (core create_invoice, group_key) and counts as it."""
 	if party_type != "Customer":
 		return []  # purchase-side subscriptions are never consolidated
 	subscription = frappe.qb.DocType("Subscription")
@@ -184,7 +210,10 @@ def _candidate_subscriptions(party, party_type, company) -> list[str]:
 	if party:
 		query = query.where(subscription.party == party)
 	if company:
-		query = query.where(subscription.company == company)
+		company_filter = subscription.company == company
+		if company == get_default_company():
+			company_filter |= IfNull(subscription.company, "") == ""
+		query = query.where(company_filter)
 	return query.run(pluck="name")
 
 
@@ -220,6 +249,7 @@ def _run_group(key, sub_names, run_posting_date, *, dry_run, lock_timeout):
 				frappe.db.commit()  # fresh REPEATABLE-READ snapshot; nothing pending at this point
 			sp = "subbill_" + frappe.generate_hash(length=8)  # bare identifier; never derived from the party
 			frappe.db.savepoint(sp)
+			sp_open = True  # False once released: rollback-to-savepoint would then raise 1305
 			ctx.active = frappe._dict(
 				key=key, posting_date=run_posting_date, sink=None, members=[], dry_run=dry_run
 			)
@@ -232,8 +262,9 @@ def _run_group(key, sub_names, run_posting_date, *, dry_run, lock_timeout):
 				subs = [sub for sub in subs if sub.name not in skipped]
 				if not subs:
 					frappe.db.release_savepoint(sp)
+					sp_open = False
 					if not dry_run:
-						ctx.done[memo_key] = "ok"
+						_mark_done(ctx, memo_key, "ok")
 					return None
 				for sub in subs:
 					sub.process(
@@ -242,33 +273,42 @@ def _run_group(key, sub_names, run_posting_date, *, dry_run, lock_timeout):
 				if ctx.active.sink is None:
 					# every member fell through core's own trigger check after all; nothing to finalise
 					frappe.db.release_savepoint(sp)
+					sp_open = False
 					if not dry_run:
-						ctx.done[memo_key] = "ok"
+						_mark_done(ctx, memo_key, "ok")
 					return None
 				summary = _finalize(ctx.active, skipped)
 				if dry_run:
 					frappe.db.rollback(save_point=sp)
+					sp_open = False
 				else:
 					frappe.db.release_savepoint(sp)
+					sp_open = False
 					if not frappe.in_test:
 						frappe.db.commit()  # visible to the next lock holder
-					ctx.done[memo_key] = "ok"
+					_mark_done(ctx, memo_key, "ok")
 				return summary
 			except frappe.QueryDeadlockError as e:
 				frappe.db.rollback()  # the server already rolled back the transaction; the savepoint is gone
 				_log_group_failure(key, e)
 				if not dry_run:
-					ctx.done[memo_key] = "failed"
+					_mark_done(ctx, memo_key, "failed")
 				raise ConsolidatedBillingError(
 					_("Consolidated billing for {0} hit a deadlock").format(party)
 				) from e
 			except Exception as e:
-				frappe.db.rollback(save_point=sp)
+				if sp_open:
+					frappe.db.rollback(save_point=sp)
+				else:
+					# the group is already released / committed; a failure inside commit()'s after_commit
+					# callbacks (Redis enqueue, email, webhooks) must not turn into a raw 1305 "SAVEPOINT does
+					# not exist" that escapes process_all (which only catches ValidationError)
+					frappe.db.rollback()
 				_log_group_failure(key, e)
 				if not frappe.in_test and not dry_run:
 					frappe.db.commit()  # persist the Error Log row
 				if not dry_run:
-					ctx.done[memo_key] = "failed"
+					_mark_done(ctx, memo_key, "failed")
 				if isinstance(e, ConsolidatedBillingError):
 					raise
 				raise ConsolidatedBillingError(
@@ -279,17 +319,18 @@ def _run_group(key, sub_names, run_posting_date, *, dry_run, lock_timeout):
 	except LockTimeoutError as e:
 		if not dry_run:
 			# the party is being billed elsewhere: the siblings in this batch must not fall back to standalone
-			ctx.done[memo_key] = "failed"
+			_mark_done(ctx, memo_key, "failed")
 		raise ConsolidationLocked(_("Billing for {0} is running elsewhere").format(party)) from e
 
 
 def _log_group_failure(key, exc) -> None:
-	frappe.log_error(
-		title=f"Consolidated billing failed: {key[2]}",
-		message=frappe.get_traceback(with_context=True) or f"{type(exc).__name__}: {exc}",
-		reference_doctype=key[1],
-		reference_name=key[2],
-	)
+	with contextlib.suppress(Exception):  # logging must never replace the error being handled
+		frappe.log_error(
+			title=f"Consolidated billing failed: {key[2]}",
+			message=frappe.get_traceback(with_context=True) or f"{type(exc).__name__}: {exc}",
+			reference_doctype=key[1],
+			reference_name=key[2],
+		)
 
 
 # ---- finalisation and summary ------------------------------------------------------------------------------
