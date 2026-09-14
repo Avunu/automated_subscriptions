@@ -84,12 +84,17 @@ class Subscription(BaseSubscription):
 		"""Anchored: the day before the next anchor occurrence after `date` (a boundary date gets a full term).
 		The trial branch and the end_date clamp are core's, verbatim."""
 		profile = self._billing_profile()
-		if profile is None or not self.plans:
+		if profile is None:
+			return super().get_current_invoice_end(date)
+		cycle_info = self.get_billing_cycle_and_interval()
+		if not cycle_info:
+			# no plan rows, or every plan link blank/unknown (an API insert runs before_insert before the mandatory
+			# check): core's get_last_day fallback keeps the insert alive so mandatory/link validation reports the row
 			return super().get_current_invoice_end(date)
 		date = getdate(date)  # getdate(None) == today, matching core's nowdate() fallback
 		if self.is_trialling() and date < getdate(self.trial_period_end):
 			return getdate(self.trial_period_end)
-		info = self.get_billing_cycle_and_interval()[0]  # validate_plans_billing_cycle guarantees one row
+		info = cycle_info[0]  # validate_plans_billing_cycle rejects more than one distinct cycle
 		grid, _units, _pct = self._resolve_grid_for_plan(
 			profile,
 			frappe._dict(
@@ -111,7 +116,7 @@ class Subscription(BaseSubscription):
 		profile = self._billing_profile()
 		if profile is None:
 			return self._enrich_items(plans, super().get_items_from_plans(plans, prorate))
-		start, end = getdate(self.current_invoice_start), getdate(self.current_invoice_end)
+		start, end = self._billing_window()
 		settings = get_settings()
 		precision = get_field_precision(frappe.get_meta("Sales Invoice Item").get_field("rate"))
 		items = []
@@ -153,7 +158,7 @@ class Subscription(BaseSubscription):
 		description from service_identifier. Purchase Invoice Item has none of these columns."""
 		if self.party_type != "Customer":
 			return items
-		start, end = getdate(self.current_invoice_start), getdate(self.current_invoice_end)
+		start, end = self._billing_window()
 		description = escape_html(self.get("service_identifier") or "") or None
 		for plan, item in zip(plans, items, strict=True):  # core appends exactly one item per plan row
 			item["subscription"] = self.name
@@ -164,13 +169,48 @@ class Subscription(BaseSubscription):
 				item["description"] = description
 		return items
 
+	def _billing_window(self):
+		"""(start, end) this invoice bills: the current period, narrowed by the from/to dates create_invoice was
+		given (core cancel_subscription passes current_invoice_start..cancelation_date for the arrears invoice)."""
+		start, end = getdate(self.current_invoice_start), getdate(self.current_invoice_end)
+		window = self.flags.get("subscription_billing_window")
+		if window:
+			start = max(start, getdate(window[0]))
+			end = min(
+				end, getdate(window[1])
+			)  # clamp to the term: a late cancel never bills more than the term
+		return start, end
+
+	def _realign_current_period(self) -> bool:
+		"""Anchored subs whose stored period predates the customer's anchor (M5, or any later anchor change)
+		keep their start and get the grid's end: the first anchored invoice is the stub start..next anchor - 1.
+		Returns True when the end was changed. No-op when already aligned or not anchored."""
+		if self._billing_profile() is None or not self.plans or not self.current_invoice_start:
+			return False
+		aligned_end = getdate(self.get_current_invoice_end(self.current_invoice_start))
+		if getdate(self.current_invoice_end) == aligned_end:
+			return False
+		self.current_invoice_end = aligned_end
+		return True
+
 	def create_invoice(self, from_date=None, to_date=None, posting_date=None):
 		profile = self._billing_profile()
-		if profile is None:
-			return super().create_invoice(from_date, to_date, posting_date)
-		# anchored invoices ignore Pricing Rules so the prorated plan rate survives the save
-		with billing_context(self, ignore_pricing_rule=True):
-			return super().create_invoice(from_date, to_date, posting_date)
+		if profile is not None:
+			self._realign_current_period()  # stub for periods stored before the anchor was set (DECISIONS.md Q-14)
+		# core's get_items_from_plans takes no dates: stash the window create_invoice was given (metadata only on
+		# the stock path; the anchored factor and the per-line period read it via _billing_window)
+		self.flags.subscription_billing_window = (
+			from_date or self.current_invoice_start,
+			to_date or self.current_invoice_end,
+		)
+		try:
+			if profile is None:
+				return super().create_invoice(from_date, to_date, posting_date)
+			# anchored invoices ignore Pricing Rules so the prorated plan rate survives the save
+			with billing_context(self, ignore_pricing_rule=True):
+				return super().create_invoice(from_date, to_date, posting_date)
+		finally:
+			self.flags.pop("subscription_billing_window", None)
 
 	def validate(self):
 		super().validate()
@@ -180,22 +220,42 @@ class Subscription(BaseSubscription):
 				_("Follow Calendar Months cannot be combined with a customer billing anchor; clear it."),
 				UnsupportedBillingGrid,
 			)
+		if profile is not None:
+			# get_current_invoice_end only sees a synthetic plan dict, so a Monthly Rate plan would otherwise
+			# fail inside create_invoice (every night, logged by process_all) instead of on this save
+			for plan in self.plans:
+				if (
+					plan.plan
+					and frappe.db.get_value("Subscription Plan", plan.plan, "price_determination")
+					== "Monthly Rate"
+				):
+					frappe.throw(
+						_("Plan {0} uses Monthly Rate pricing, which cannot be prorated or anchored.").format(
+							plan.plan
+						),
+						UnsupportedBillingGrid,
+					)
 		if (
 			self.is_new()
 			and not (frappe.flags.in_import or frappe.flags.in_migrate)
-			and self._catch_up_is_deferred()
+			and self._catch_up_is_incomplete()
 		):
-			# validate runs after before_insert, so current_invoice_end is already set for a new doc
+			# validate runs after before_insert, so current_invoice_end is already set for a new doc.
+			# The deferred catch-up is billed by the daily job, whose first run after this insert posts
+			# tomorrow at the earliest (Daily cron 0 0 * * *); core caps that late fire at
+			# current_invoice_end + one cycle, so today must be strictly before the cap.
 			cycle = self.get_billing_cycle_data()
 			upper = (
 				getdate(add_to_date(self.current_invoice_end, **cycle))
 				if cycle
 				else getdate(self.current_invoice_end)
 			)
-			if getdate(nowdate()) > upper:
+			if getdate(nowdate()) >= upper:
 				frappe.throw(
 					_(
-						"Start Date {0} is more than one billing cycle in the past. Insert the subscription with "
+						"Start Date {0} is too far in the past for the elapsed periods to be billed (they reach "
+						"one billing cycle past the first period end). Either enable Generate New Invoices Past "
+						"Due Date so every elapsed period is billed on insert, or insert the subscription with "
 						"frappe.flags.in_import set and replay the elapsed periods with Process Subscription."
 					).format(self.start_date),
 					BackdatedStartNotSupported,
@@ -214,12 +274,22 @@ class Subscription(BaseSubscription):
 			self._billing_profile() is not None and get_settings().mid_term_billing_mode == "Next Daily Run"
 		)
 
+	def _catch_up_is_incomplete(self) -> bool:
+		"""True when after_insert cannot bill every elapsed period: the catch-up is deferred (daily run / runner),
+		or core's generate_invoices_till_date stops after the first invoice because
+		generate_new_invoices_past_due_date is off. In both cases the daily run's one-cycle cap
+		(can_generate_new_invoice) is followed by a silent re-anchor to today (core process()).
+		Stock customers are never guarded."""
+		if self._catch_up_is_deferred():
+			return True
+		return self._billing_profile() is not None and not cint(self.generate_new_invoices_past_due_date)
+
 	def generate_invoices_till_date(self) -> None:
 		"""Override this, not after_insert, so core's in_import / in_migrate / future-start checks stay in force."""
 		if self._billing_profile() is None:
 			return super().generate_invoices_till_date()  # stock catch-up
 		if get_settings().mid_term_billing_mode == "Next Daily Run":
 			return  # the daily run bills the stub: posting >= current_invoice_start, inside the one-cycle cap
-		return (
-			super().generate_invoices_till_date()
-		)  # Immediate: stock loop, each process() -> our create_invoice
+		# Immediate: stock loop, each process() -> our create_invoice; it stops after one invoice unless
+		# generate_new_invoices_past_due_date is set (validate guards the rest)
+		return super().generate_invoices_till_date()

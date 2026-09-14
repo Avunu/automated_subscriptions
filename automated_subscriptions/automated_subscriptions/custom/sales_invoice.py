@@ -30,6 +30,10 @@ class SalesInvoice(BaseSalesInvoice):
 	first call already applies Pricing Rules (set_missing_item_details -> apply_pricing_rule_on_items) while
 	ignore_pricing_rule is still 0 - too early for the before_validate doc_event alone."""
 
+	# core whitelists set_missing_values and the desk calls it via run_doc_method when is_pos is ticked
+	# (sales_invoice.js set_pos_data); is_whitelisted checks the resolved function object, so the override
+	# must re-declare it or every POS toggle fails with PermissionError
+	@frappe.whitelist()
 	def set_missing_values(self, for_validate=False):
 		apply_subscription_billing_policy(self)
 		return super().set_missing_values(for_validate)
