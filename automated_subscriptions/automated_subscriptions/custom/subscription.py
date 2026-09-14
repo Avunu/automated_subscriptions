@@ -267,6 +267,31 @@ class Subscription(BaseSubscription):
 		self.current_invoice_end = aligned_end
 		return True
 
+	def _credit_note_cancellation_applies(self) -> bool:
+		"""Credit-note cancellation is opt-in via the customer (anchored or consolidating) and the setting, and
+		only for subscriptions billed in advance: a postpaid sub ("End of the current subscription period") has
+		nothing prepaid to credit and needs core's prorated arrears invoice instead. Every other subscription
+		keeps core's cancellation (DECISIONS.md D-12)."""
+		return (
+			self.party_type == "Customer"
+			and self.generate_invoice_at != "End of the current subscription period"
+			and (self._billing_profile() is not None or self.is_consolidating())
+			and bool(get_settings().credit_note_on_cancellation)
+		)
+
+	@frappe.whitelist()  # core whitelists cancel_subscription (desk button -> run_doc_method -> is_whitelisted)
+	def cancel_subscription(self, cancel_date=None):
+		"""Desk button and API: credit the unused service instead of core's arrears invoice when the customer
+		has opted in; `cancel_date` (default today) is the last billed day. The kwarg name is what the desk
+		button passes (`frm.call` -> run_doc_method)."""
+		if not self._credit_note_cancellation_applies():
+			return super().cancel_subscription()
+		from automated_subscriptions.automated_subscriptions.billing.credit_note import (
+			cancel_with_credit_note,
+		)
+
+		return cancel_with_credit_note(self.name, cancel_date or nowdate())
+
 	@frappe.whitelist()  # core whitelists process (desk "Fetch Subscription Updates" -> run_doc_method -> is_whitelisted)
 	def process(self, posting_date=None):
 		"""Realign a period stored before the customer's anchor was set *before* core evaluates the trigger date,
