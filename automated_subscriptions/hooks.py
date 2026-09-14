@@ -6,6 +6,14 @@ app_email = "mail@avu.nu"
 app_license = "mit"
 required_apps = ["erpnext", "payments"]
 
+# Fresh installs mark all patches as completed without running them (frappe/installer.py
+# set_all_patches_as_completed); existing sites get this index from the post_model_sync patch.
+after_install = ["automated_subscriptions.patches.v1_1.add_sales_invoice_subscription_index.execute"]
+# Both run after sync_customizations (install: after_sync; migrate: after_migrate), unlike after_install and
+# post_model_sync patches, so the Subscription Settings custom fields exist when the defaults are written.
+after_sync = ["automated_subscriptions.automated_subscriptions.billing.settings.materialise_defaults"]
+after_migrate = ["automated_subscriptions.automated_subscriptions.billing.settings.materialise_defaults"]
+
 doc_events = {
 	"Customer": {
 		"validate": "automated_subscriptions.automated_subscriptions.custom.customer.validate",

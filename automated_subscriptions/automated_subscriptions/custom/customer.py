@@ -9,5 +9,6 @@ def validate(doc, method=None):
 		frappe.throw(_("Subscription Billing Anchor Date is required for Anniversary anchoring."))
 	if mode != "Anniversary":
 		doc.subscription_billing_anchor_date = None  # Calendar ignores it; blank has none
-	if not mode:
+	if not mode and doc.get("subscription_billing_interval"):
+		# only touch it when set: pre-migrate rows are NULL and a NULL -> "" write would log a Version entry
 		doc.subscription_billing_interval = ""
