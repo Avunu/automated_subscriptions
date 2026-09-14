@@ -24,6 +24,7 @@ doc_events = {
 	},
 }
 extend_doctype_class = {
+	"Process Subscription": "automated_subscriptions.automated_subscriptions.custom.process_subscription.ProcessSubscription",
 	"Sales Invoice": "automated_subscriptions.automated_subscriptions.custom.sales_invoice.SalesInvoice",
 	"Subscription": "automated_subscriptions.automated_subscriptions.custom.subscription.Subscription",
 	"Subscription Settings": "automated_subscriptions.automated_subscriptions.custom.subscription_settings.SubscriptionSettings",

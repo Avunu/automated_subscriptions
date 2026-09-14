@@ -1,8 +1,10 @@
 import contextlib
 
 import frappe
+from erpnext import get_default_company
 from erpnext.accounts.doctype.accounting_dimension.accounting_dimension import get_accounting_dimensions
 from erpnext.accounts.doctype.subscription.subscription import Subscription as BaseSubscription
+from erpnext.accounts.doctype.subscription.subscription import is_prorate
 from erpnext.accounts.doctype.subscription_plan.subscription_plan import get_plan_rate
 from frappe import _
 from frappe.model.meta import get_field_precision
@@ -16,6 +18,7 @@ from automated_subscriptions.automated_subscriptions.billing.anchor import (
 )
 from automated_subscriptions.automated_subscriptions.billing.exceptions import (
 	BackdatedStartNotSupported,
+	ConsolidatedBillingError,
 	UnsupportedBillingGrid,
 	ZeroPlanRate,
 )
@@ -23,6 +26,11 @@ from automated_subscriptions.automated_subscriptions.billing.profile import (
 	BillingProfile,
 	get_billing_profile,
 	is_consolidating_customer,
+)
+from automated_subscriptions.automated_subscriptions.billing.runner import (
+	_active_run,
+	_run_ctx,
+	run_consolidated_billing,
 )
 from automated_subscriptions.automated_subscriptions.billing.settings import get_settings
 
@@ -41,6 +49,18 @@ def billing_context(subscription, *, ignore_pricing_rule):
 		yield
 	finally:
 		frappe.flags.subscription_billing = previous
+
+
+@contextlib.contextmanager
+def _submit_suppressed(subscription):
+	"""Core's create_invoice saves and submits in one function and reads submit_invoice exactly once; flip it
+	on the in-memory object only so the consolidation sink stays a draft until _finalize submits it."""
+	saved = subscription.submit_invoice
+	subscription.submit_invoice = 0
+	try:
+		yield
+	finally:
+		subscription.submit_invoice = saved
 
 
 class Subscription(BaseSubscription):
@@ -199,15 +219,91 @@ class Subscription(BaseSubscription):
 		the one-cycle cap, the cancel_at_period_end snapshot and is_current_invoice_generated. For "End of the
 		current subscription period" the trigger *is* current_invoice_end, so a stale end would either fire the stub
 		at the old end with posting_date = the realigned (future) end, or defer it months past the aligned end and
-		back-date it. Core's trailing save() persists the healed period (review round R2-02 / R7)."""
+		back-date it. Core's trailing save() persists the healed period (review round R2-02 / R7).
+
+		Consolidating customers are billed by the runner (billing/runner.py), never standalone: the first sub of
+		a party that core's process_all reaches runs the whole party group; the siblings hit the run memo. After
+		a successful run every member falls through to core's process() on a reloaded copy for status
+		maintenance only (billed -> not due). A failed group raises so no member is billed on its own."""
 		if self._billing_profile() is not None:
 			self._realign_current_period()
-		return super().process(posting_date)
+		if _active_run() is not None:
+			# inside the runner: core's process() on the runner's own copy; create_invoice routes to the sink
+			try:
+				return super().process(posting_date)
+			finally:
+				self.flags.pop("consolidation_current_invoice", None)
+		if not self.is_consolidating():
+			return super().process(posting_date)  # stock behaviour
+		ctx = _run_ctx()
+		key = (self.company or get_default_company(), self.party_type, self.party, str(getdate(posting_date)))
+		state = ctx.done.get(key)
+		if state is None:
+			run_consolidated_billing(
+				posting_date, party=self.party, party_type=self.party_type, company=key[0]
+			)
+			state = ctx.done.get(key, "ok")  # the runner records "ok"/"failed"; it never re-raises per group
+		if state == "failed":
+			raise ConsolidatedBillingError(
+				_(
+					"Consolidated billing for {0} failed earlier in this run; not billing {1} standalone"
+				).format(self.party, self.name)
+			)
+		self.reload()  # the runner saved a different copy of this row
+		return super().process(posting_date)  # billed -> not due -> status maintenance only
+
+	def get_current_invoice(self):
+		"""Run-scoped guard: for the rest of the process() call that put this sub's lines on the consolidation
+		sink, the sink *is* the current invoice (core's header-only lookup would return the sub's previous invoice
+		and, past grace with cancel_after_grace, cancel the subscription it just billed). Only ever set on the
+		runner's own doc copies."""
+		sink = self.flags.get("consolidation_current_invoice")
+		if sink is not None:
+			return sink
+		return super().get_current_invoice()
 
 	def create_invoice(self, from_date=None, to_date=None, posting_date=None):
+		"""Outside a consolidation run (or for a non-consolidating customer): the standalone invoice. Inside a
+		run: sub[0] creates the sink through core's own create_invoice (submission suppressed), every later sub
+		absorbs its lines into that same draft object; the runner submits it once."""
+		run = _active_run()
+		if run is None or not self.is_consolidating():
+			return self._create_standalone_invoice(from_date, to_date, posting_date)
 		profile = self._billing_profile()
 		if profile is not None:
-			# direct callers (cancel_subscription arrears, PR 3 dispatcher); a no-op after process() realigned
+			self._realign_current_period()  # the period below must be the aligned one
+		self.flags.subscription_billing_window = (
+			from_date or self.current_invoice_start,
+			to_date or self.current_invoice_end,
+		)
+		try:
+			period = (
+				getdate(from_date or self.current_invoice_start),
+				getdate(to_date or self.current_invoice_end),
+			)
+			with billing_context(self, ignore_pricing_rule=profile is not None):
+				if run.sink is None:
+					with _submit_suppressed(self):
+						run.sink = super().create_invoice(from_date, to_date, posting_date)  # saved draft
+				else:
+					self._absorb_into(run.sink, period)
+		finally:
+			self.flags.pop("subscription_billing_window", None)
+		run.members.append(
+			frappe._dict(
+				name=self.name,
+				period=period,
+				submit_invoice=cint(self.submit_invoice),
+				service_identifier=self.get("service_identifier"),
+			)
+		)
+		self.flags.consolidation_current_invoice = run.sink  # grace-period guard, see get_current_invoice
+		return run.sink
+
+	def _create_standalone_invoice(self, from_date=None, to_date=None, posting_date=None):
+		profile = self._billing_profile()
+		if profile is not None:
+			# direct callers (cancel_subscription arrears); a no-op after process() realigned
 			self._realign_current_period()  # stub for periods stored before the anchor was set (DECISIONS.md Q-14)
 		# core's get_items_from_plans takes no dates: stash the window create_invoice was given (metadata only on
 		# the stock path; the anchored factor and the per-line period read it via _billing_window)
@@ -223,6 +319,37 @@ class Subscription(BaseSubscription):
 				return super().create_invoice(from_date, to_date, posting_date)
 		finally:
 			self.flags.pop("subscription_billing_window", None)
+
+	def _absorb_into(self, sink, period):
+		"""Append this sub's lines (factor, links, period, description from get_items_from_plans) to the sink
+		and re-save the same object (its flags.ignore_mandatory persists; a fresh get_doc would lose it)."""
+		items = self.get_items_from_plans(self.plans, is_prorate())
+		existing = {(d.item_code, d.description or "") for d in sink.items}
+		allow_dupes = cint(frappe.db.get_single_value("Selling Settings", "allow_multiple_items"))
+		for item in items:
+			if not flt(item.get("rate")) or not flt(item.get("qty")):
+				raise ConsolidatedBillingError(
+					_(
+						"Subscription {0} produced a zero-rate line; core would re-price it at list price."
+					).format(self.name)
+				)
+			# set_missing_item_details fills a blank description with the Item's, which is what core's
+			# duplicate check (validate_for_duplicate_items) compares
+			description = item.get("description") or (
+				frappe.get_cached_value("Item", item["item_code"], "description") or ""
+			)
+			if not allow_dupes and (item["item_code"], description) in existing:
+				raise ConsolidatedBillingError(
+					_(
+						"Subscription {0}: identical item and description already on {1}; set a Service "
+						"Identifier or enable Selling Settings > Allow Item to Be Added Multiple Times"
+					).format(self.name, sink.name)
+				)
+			sink.append("items", item)
+			existing.add((item["item_code"], description))
+		sink.from_date = min(getdate(sink.from_date), period[0])
+		sink.to_date = max(getdate(sink.to_date), period[1])
+		sink.save()
 
 	def validate(self):
 		super().validate()
@@ -303,6 +430,20 @@ class Subscription(BaseSubscription):
 
 	def generate_invoices_till_date(self) -> None:
 		"""Override this, not after_insert, so core's in_import / in_migrate / future-start checks stay in force."""
+		if self.is_consolidating():
+			# never run the runner (which commits between groups) inside the insert request; validate() already
+			# rejected starts the deferred run could not bill (one-cycle cap)
+			if get_settings().mid_term_billing_mode == "Immediate":
+				frappe.enqueue(
+					"automated_subscriptions.automated_subscriptions.billing.runner.run_consolidated_billing",
+					queue="long",
+					enqueue_after_commit=True,
+					posting_date=nowdate(),
+					party=self.party,
+					party_type=self.party_type,
+					company=self.company,
+				)
+			return  # Next Daily Run: the daily job picks it up
 		if self._billing_profile() is None:
 			return super().generate_invoices_till_date()  # stock catch-up
 		if get_settings().mid_term_billing_mode == "Next Daily Run":
