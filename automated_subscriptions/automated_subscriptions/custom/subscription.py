@@ -7,7 +7,7 @@ from erpnext.accounts.doctype.subscription_plan.subscription_plan import get_pla
 from frappe import _
 from frappe.model.meta import get_field_precision
 from frappe.types import DF
-from frappe.utils import add_to_date, cint, escape_html, flt, getdate, nowdate
+from frappe.utils import add_days, add_to_date, cint, escape_html, flt, getdate, nowdate
 
 from automated_subscriptions.automated_subscriptions.billing.anchor import (
 	period_end,
@@ -193,9 +193,21 @@ class Subscription(BaseSubscription):
 		self.current_invoice_end = aligned_end
 		return True
 
+	@frappe.whitelist()  # core whitelists process (desk "Fetch Subscription Updates" -> run_doc_method -> is_whitelisted)
+	def process(self, posting_date=None):
+		"""Realign a period stored before the customer's anchor was set *before* core evaluates the trigger date,
+		the one-cycle cap, the cancel_at_period_end snapshot and is_current_invoice_generated. For "End of the
+		current subscription period" the trigger *is* current_invoice_end, so a stale end would either fire the stub
+		at the old end with posting_date = the realigned (future) end, or defer it months past the aligned end and
+		back-date it. Core's trailing save() persists the healed period (review round R2-02 / R7)."""
+		if self._billing_profile() is not None:
+			self._realign_current_period()
+		return super().process(posting_date)
+
 	def create_invoice(self, from_date=None, to_date=None, posting_date=None):
 		profile = self._billing_profile()
 		if profile is not None:
+			# direct callers (cancel_subscription arrears, PR 3 dispatcher); a no-op after process() realigned
 			self._realign_current_period()  # stub for periods stored before the anchor was set (DECISIONS.md Q-14)
 		# core's get_items_from_plans takes no dates: stash the window create_invoice was given (metadata only on
 		# the stock path; the anchored factor and the per-line period read it via _billing_window)
@@ -235,37 +247,52 @@ class Subscription(BaseSubscription):
 						),
 						UnsupportedBillingGrid,
 					)
-		if (
-			self.is_new()
-			and not (frappe.flags.in_import or frappe.flags.in_migrate)
-			and self._catch_up_is_incomplete()
-		):
-			# validate runs after before_insert, so current_invoice_end is already set for a new doc.
-			# The deferred catch-up is billed by the daily job, whose first run after this insert posts
-			# tomorrow at the earliest (Daily cron 0 0 * * *); core caps that late fire at
-			# current_invoice_end + one cycle, so today must be strictly before the cap.
-			cycle = self.get_billing_cycle_data()
-			upper = (
-				getdate(add_to_date(self.current_invoice_end, **cycle))
-				if cycle
-				else getdate(self.current_invoice_end)
-			)
-			if getdate(nowdate()) >= upper:
+		if self.is_new() and not (frappe.flags.in_import or frappe.flags.in_migrate):
+			# validate runs after before_insert, so current_invoice_end is the stub's end for a new doc.
+			today = getdate(nowdate())
+			stub_end = getdate(self.current_invoice_end)
+			if (
+				profile is not None
+				and not cint(self.generate_new_invoices_past_due_date)
+				and today > stub_end
+			):
+				# The period after the stub has already begun. With the flag off core bills it only once the
+				# stub is Paid (can_generate_new_invoice) and re-anchors the period to today the day after it
+				# ends (process() elif branch), so it is dropped unless the customer pays within the days left.
 				frappe.throw(
 					_(
-						"Start Date {0} is too far in the past for the elapsed periods to be billed (they reach "
-						"one billing cycle past the first period end). Either enable Generate New Invoices Past "
-						"Due Date so every elapsed period is billed on insert, or insert the subscription with "
-						"frappe.flags.in_import set and replay the elapsed periods with Process Subscription."
-					).format(self.start_date),
+						"Start Date {0} lies in a billing period that has already ended, so the period starting "
+						"{1} would only be billed once the first invoice is paid and is dropped when it ends. "
+						"Either enable Generate New Invoices Past Due Date so every elapsed period is billed, or "
+						"insert the subscription with frappe.flags.in_import set and replay the elapsed periods "
+						"with Process Subscription."
+					).format(self.start_date, add_days(stub_end, 1)),
 					BackdatedStartNotSupported,
 				)
+			if self._catch_up_is_deferred():  # anchored Next Daily Run, or consolidating (PR 3 runner)
+				# The deferred stub is billed by the daily job, whose first run after this insert posts
+				# tomorrow at the earliest (Daily cron 0 0 * * *); core caps that late fire at
+				# current_invoice_end + one cycle, so today must be strictly before the cap.
+				cycle = self.get_billing_cycle_data()
+				upper = getdate(add_to_date(stub_end, **cycle)) if cycle else stub_end
+				if today >= upper:
+					frappe.throw(
+						_(
+							"Start Date {0} is too far in the past for the elapsed periods to be billed (they reach "
+							"one billing cycle past the first period end). Either enable Generate New Invoices Past "
+							"Due Date so every elapsed period is billed on insert, or insert the subscription with "
+							"frappe.flags.in_import set and replay the elapsed periods with Process Subscription."
+						).format(self.start_date),
+						BackdatedStartNotSupported,
+					)
 
 	def _catch_up_is_deferred(self) -> bool:
-		"""True when after_insert will not bill elapsed periods synchronously (see generate_invoices_till_date).
+		"""True when after_insert will not bill the stub synchronously (see generate_invoices_till_date).
 
 		The daily run is capped at one cycle past current_invoice_end (core can_generate_new_invoice) and then
-		re-anchors the period to today, silently losing the elapsed periods."""
+		re-anchors the period to today, silently losing the stub; validate() rejects inserts on or past that cap.
+		With generate_new_invoices_past_due_date off the tighter "period already ended" check in validate()
+		applies in every mode (PR 3 relies on this helper for consolidating subs)."""
 		if (
 			self.is_consolidating()
 		):  # PR 3 routes these through the runner (enqueued), never the catch-up loop
@@ -273,16 +300,6 @@ class Subscription(BaseSubscription):
 		return (
 			self._billing_profile() is not None and get_settings().mid_term_billing_mode == "Next Daily Run"
 		)
-
-	def _catch_up_is_incomplete(self) -> bool:
-		"""True when after_insert cannot bill every elapsed period: the catch-up is deferred (daily run / runner),
-		or core's generate_invoices_till_date stops after the first invoice because
-		generate_new_invoices_past_due_date is off. In both cases the daily run's one-cycle cap
-		(can_generate_new_invoice) is followed by a silent re-anchor to today (core process()).
-		Stock customers are never guarded."""
-		if self._catch_up_is_deferred():
-			return True
-		return self._billing_profile() is not None and not cint(self.generate_new_invoices_past_due_date)
 
 	def generate_invoices_till_date(self) -> None:
 		"""Override this, not after_insert, so core's in_import / in_migrate / future-start checks stay in force."""

@@ -72,13 +72,13 @@ class TestProration(IntegrationTestCase):
 		frappe.db.rollback()
 		super().tearDown()
 
-	def anchored_subscription(self, party, plan, start, today=None, **kwargs):
+	def anchored_subscription(self, party, plan, start, today=None, qty=1, **kwargs):
 		"""Insert an anchored subscription with today frozen at its start date (or `today`)."""
 		kwargs.setdefault("days_until_due", 15)  # due date in the future -> status stays Active
 		with frozen_today(today or start):
 			return create_subscription(
 				party=party,
-				plans=[{"plan": plan, "qty": 1}],
+				plans=[{"plan": plan, "qty": qty}],
 				start_date=start,
 				generate_invoice_at=BEGINNING,
 				submit_invoice=1,
@@ -352,9 +352,15 @@ class TestProration(IntegrationTestCase):
 		with self.assertRaises(BackdatedStartNotSupported):
 			self.anchored_subscription(CALENDAR, YEAR_PLAN, "2024-06-01", today=today)
 
-		# inside the one-cycle window (2025-12-31 + 1 year >= today): accepted and left to the daily run
-		sub = self.anchored_subscription(CALENDAR, YEAR_PLAN, "2025-06-01", today=today)
-		self.assertEqual(invoices_for(sub), [])
+		# inside the one-cycle window (2025-12-31 + 1 year >= today) but the 2026 period has already begun:
+		# with generate_new_invoices_past_due_date off core bills 2026 only once the stub is paid and drops
+		# it on 2027-01-01, so the insert is rejected unless the flag is set
+		with self.assertRaises(BackdatedStartNotSupported):
+			self.anchored_subscription(CALENDAR, YEAR_PLAN, "2025-06-01", today=today)
+		sub = self.anchored_subscription(
+			CALENDAR, YEAR_PLAN, "2025-06-01", today=today, generate_new_invoices_past_due_date=1
+		)
+		self.assertEqual(invoices_for(sub), [])  # accepted and left to the daily run
 		self.assert_current_period(sub, "2025-06-01", "2025-12-31")
 
 		frappe.flags.in_import = True
@@ -382,11 +388,16 @@ class TestProration(IntegrationTestCase):
 		# The daily job posts tomorrow at the earliest; core caps its late fire at current_invoice_end + one
 		# cycle, so an insert on the cap day itself would be re-anchored (stub never billed) by the next run.
 		set_setting("mid_term_billing_mode", "Next Daily Run")
-		# stub 2025-12-15..2025-12-31, cap = 2026-01-30
+		# stub 2025-12-15..2025-12-31, cap = 2026-01-30 (the cap is the only limit once
+		# generate_new_invoices_past_due_date lets every elapsed period bill)
 		with self.assertRaises(BackdatedStartNotSupported):
-			self.anchored_subscription(CALENDAR, MONTH_PLAN, "2025-12-15", today="2026-01-30")
+			self.anchored_subscription(
+				CALENDAR, MONTH_PLAN, "2025-12-15", today="2026-01-30", generate_new_invoices_past_due_date=1
+			)
 
-		sub = self.anchored_subscription(CALENDAR, MONTH_PLAN, "2025-12-15", today="2026-01-29")
+		sub = self.anchored_subscription(
+			CALENDAR, MONTH_PLAN, "2025-12-15", today="2026-01-29", generate_new_invoices_past_due_date=1
+		)
 		self.assertEqual(invoices_for(sub), [])
 		self.assert_current_period(sub, "2025-12-15", "2025-12-31")
 		# the accepted boundary is still billable by the next run
@@ -398,6 +409,13 @@ class TestProration(IntegrationTestCase):
 		self.assertEqual(invoice.items[0].rate, flt(900 * 17 / 31, 2))
 		self.assert_current_period(sub, "2026-01-01", "2026-01-31")
 
+		# flag 0: the boundary is the stub's own end (the next period must not have begun)
+		with self.assertRaises(BackdatedStartNotSupported):
+			self.anchored_subscription(CALENDAR, MONTH_PLAN, "2025-12-15", today="2026-01-02")
+		sub = self.anchored_subscription(CALENDAR, MONTH_PLAN, "2025-12-15", today="2025-12-31")
+		self.assertEqual(invoices_for(sub), [])
+		self.assert_current_period(sub, "2025-12-15", "2025-12-31")
+
 	def test_backdated_start_rejected_when_catch_up_stops_after_one_invoice(self):
 		# Immediate mode, generate_new_invoices_past_due_date = 0 (the default): core's catch-up loop bills only
 		# the stub and the daily run would then silently re-anchor the period to today
@@ -407,17 +425,21 @@ class TestProration(IntegrationTestCase):
 		with self.assertRaises(BackdatedStartNotSupported):
 			self.anchored_subscription(CALENDAR, MONTH_PLAN, "2025-06-01", today=today)
 
-		# inside one cycle of the first period end (2026-08-31 + 1 month > today): accepted, stub only
-		sub = self.anchored_subscription(CALENDAR, MONTH_PLAN, "2026-08-10", today=today)
+		# inside one cycle of the first period end (2026-08-31 + 1 month > today) but September has already
+		# begun: the loop would bill the stub only, and September is dropped on 2026-10-01 unless the stub is
+		# paid by then (core re-anchors the period to today) -> rejected
+		with self.assertRaises(BackdatedStartNotSupported):
+			self.anchored_subscription(CALENDAR, MONTH_PLAN, "2026-08-10", today=today)
+		# Year plan: 2025-12-31 + 1 year > today, but 2026 has begun -> rejected
+		with self.assertRaises(BackdatedStartNotSupported):
+			self.anchored_subscription(CALENDAR, YEAR_PLAN, "2025-06-01", today=today)
+
+		# start inside the current period: accepted, the stub is the only elapsed period
+		sub = self.anchored_subscription(CALENDAR, MONTH_PLAN, "2026-09-10", today=today)
 		self.assertEqual(len(invoices_for(sub)), 1)
-		self.assert_period(invoice_for(sub), "2026-08-10", "2026-08-31")
-		self.assert_current_period(sub, "2026-09-01", "2026-09-30")
-		# Year plan: 2025-12-31 + 1 year > today
-		sub = self.anchored_subscription(CALENDAR, YEAR_PLAN, "2025-06-01", today=today)
-		self.assertEqual(len(invoices_for(sub)), 1)
-		self.assert_period(invoice_for(sub), "2025-06-01", "2025-12-31")
-		self.assertEqual(invoice_for(sub).items[0].rate, flt(12000 * 214 / 365, 2))
-		self.assert_current_period(sub, "2026-01-01", "2026-12-31")
+		self.assert_period(invoice_for(sub), "2026-09-10", "2026-09-30")
+		self.assertEqual(invoice_for(sub).items[0].rate, flt(900 * 21 / 30, 2))
+		self.assert_current_period(sub, "2026-10-01", "2026-10-31")
 
 		# flag 1: every elapsed period is billed on insert
 		sub = self.anchored_subscription(
@@ -522,6 +544,72 @@ class TestProration(IntegrationTestCase):
 
 		with self.assertRaises(ZeroPlanRate):
 			self.anchored_subscription(CALENDAR, plan_name, "2026-04-15")
+		# the request-scoped policy must not leak past the failed insert (process_all continues with the next sub)
+		self.assertIsNone(frappe.flags.get("subscription_billing"))
+
+		# doc-level: insert without an invoice (deferred catch-up), then fail inside create_invoice itself
+		set_setting("mid_term_billing_mode", "Next Daily Run")
+		sub = self.anchored_subscription(CALENDAR, plan_name, "2026-04-15")
+		self.assertEqual(invoices_for(sub), [])
+		with self.assertRaises(ZeroPlanRate):
+			sub.create_invoice()
+		self.assertIsNone(frappe.flags.get("subscription_billing"))
+		self.assertNotIn("subscription_billing_window", sub.flags)
+
+	# ---- 16b
+	def test_price_list_plan_prorated_rate_survives_save_with_qty(self):
+		"""Based On Price List plan (16 of 20 live plans) with a real Item Price on the invoice's own selling
+		price list, qty 9 (Bitwarden): the prorated rate must survive set_missing_item_details /
+		calculate_item_rate (price_list_rate filled, TT:203-224 keeps our rate and derives the discount), and
+		amount is round2(rate) x qty (the accepted deviation in PR2.md 3.3)."""
+		price_list = "Standard Selling"  # INR; the list the Sales Invoice picks up from Selling Settings
+		if not frappe.db.exists(
+			"Item Price", {"item_code": "_Test Non Stock Item", "price_list": price_list}
+		):
+			frappe.get_doc(
+				{
+					"doctype": "Item Price",
+					"item_code": "_Test Non Stock Item",
+					"price_list": price_list,
+					"price_list_rate": 1000,
+					"valid_from": "2020-01-01",  # defaults to (real) today, which is after the frozen posting date
+				}
+			).insert(ignore_permissions=True)
+		plan_name = "_Test AS Priced Year Plan"
+		if not frappe.db.exists("Subscription Plan", plan_name):
+			frappe.get_doc(
+				{
+					"doctype": "Subscription Plan",
+					"plan_name": plan_name,
+					"item": "_Test Non Stock Item",
+					"price_determination": "Based On Price List",
+					"price_list": price_list,
+					"billing_interval": "Year",
+					"billing_interval_count": 1,
+					"currency": "INR",
+				}
+			).insert(ignore_permissions=True)
+
+		sub = self.anchored_subscription(CALENDAR, plan_name, "2026-04-15", qty=9)
+
+		invoice = invoice_for(sub)
+		self.assert_period(invoice, "2026-04-15", "2026-12-31")
+		self.assertEqual(invoice.ignore_pricing_rule, 1)
+		self.assertEqual(invoice.selling_price_list, price_list)
+		line = invoice.items[0]
+		self.assertEqual(line.qty, 9)
+		self.assertEqual(line.rate, flt(1000 * 261 / 365, 2))  # 715.07
+		self.assertEqual(line.rate, 715.07)
+		self.assertEqual(line.price_list_rate, 1000)
+		self.assertEqual(line.discount_amount, flt(1000 - line.rate, 2))  # 284.93, derived by core
+		self.assertEqual(line.discount_percentage, 0)
+		self.assertFalse(line.margin_type)
+		self.assertEqual(line.amount, flt(line.rate * 9, 2))  # 6435.63
+		self.assertEqual(invoice.grand_total, 6435.63)
+		# documented deviation: round2(rate) x qty, not round2(unrounded rate x qty)
+		self.assertNotEqual(line.amount, flt(1000 * 261 / 365 * 9, 2))  # 6435.62
+		self.assertEqual(line.subscription, sub.name)
+		self.assertEqual(line.subscription_plan, plan_name)
 
 	# ---- 17
 	def test_due_date_from_template_when_days_until_due_zero(self):
@@ -640,6 +728,105 @@ class TestProration(IntegrationTestCase):
 		self.assert_current_period(sub, "2026-10-02", "2026-11-01")
 		self.assertFalse(sub._realign_current_period())
 		self.assert_current_period(sub, "2026-10-02", "2026-11-01")
+
+	# ---- review round R7: End-of-period sub anchored after insert; the trigger *is* current_invoice_end
+	def test_anchor_switched_end_of_period_sub_bills_stub_on_aligned_end(self):
+		customer = make_anchored_customer("_Test AS Late Anchor EOP Customer", "").name
+		with frozen_today("2026-04-15"):
+			sub = create_subscription(
+				party=customer,
+				plans=[{"plan": YEAR_PLAN, "qty": 1}],
+				start_date="2026-04-15",
+				generate_invoice_at="End of the current subscription period",
+				submit_invoice=1,
+				days_until_due=15,
+				generate_new_invoices_past_due_date=1,
+			)
+		self.assertEqual(invoices_for(sub), [])
+		self.assert_current_period(sub, "2026-04-15", "2027-04-14")  # stock
+
+		frappe.db.set_value("Customer", customer, "subscription_billing_anchor_mode", "Calendar")
+		frappe.clear_cache(doctype="Customer")
+		sub.reload()
+		with frozen_today("2026-06-01"):
+			sub.process(
+				posting_date="2026-06-01"
+			)  # a nightly run before the aligned end: no invoice, end persisted
+		self.assertEqual(invoices_for(sub), [])
+		sub.reload()
+		self.assert_current_period(sub, "2026-04-15", "2026-12-31")
+
+		# nothing fires before the aligned end (the stale end would have fired on 2027-04-14, back-dated)
+		with frozen_today("2026-12-30"):
+			sub.process(posting_date="2026-12-30")
+		self.assertEqual(invoices_for(sub), [])
+
+		with frozen_today("2026-12-31"):
+			sub.process(posting_date="2026-12-31")
+		invoices = invoices_for(sub)
+		self.assertEqual(len(invoices), 1)
+		stub = invoices[0]
+		self.assertEqual(getdate(stub.posting_date), getdate("2026-12-31"))  # == today, never in the future
+		self.assert_period(stub, "2026-04-15", "2026-12-31")
+		self.assert_period(
+			stub.items[0], "2026-04-15", "2026-12-31", "subscription_period_start", "subscription_period_end"
+		)
+		self.assertEqual(stub.items[0].rate, 8580.82)
+		self.assertEqual(sub.status, "Active")
+		sub.reload()
+		self.assert_current_period(sub, "2027-01-01", "2027-12-31")
+
+	# ---- review round R2-02: the realigned end moves *later* (Month plan under a Year grid)
+	def test_anchor_switched_end_of_period_sub_waits_for_a_later_aligned_end(self):
+		customer = make_anchored_customer("_Test AS Late Anchor EOP Year Customer", "").name
+		with frozen_today("2026-10-02"):
+			sub = create_subscription(
+				party=customer,
+				plans=[{"plan": MONTH_PLAN, "qty": 1}],
+				start_date="2026-10-02",
+				generate_invoice_at="End of the current subscription period",
+				submit_invoice=1,
+				days_until_due=15,
+			)
+		self.assertEqual(invoices_for(sub), [])
+		self.assert_current_period(sub, "2026-10-02", "2026-11-01")  # stock
+
+		frappe.db.set_value(
+			"Customer",
+			customer,
+			{"subscription_billing_anchor_mode": "Calendar", "subscription_billing_interval": "Year"},
+		)
+		frappe.clear_cache(doctype="Customer")
+		sub.reload()
+		# the old period end: core's trigger check must see the realigned end, or it would post an invoice
+		# dated 2026-12-31 today
+		with frozen_today("2026-11-01"):
+			sub.process(posting_date="2026-11-01")
+		self.assertEqual(invoices_for(sub), [])
+		sub.reload()
+		self.assert_current_period(sub, "2026-10-02", "2026-12-31")
+
+		with frozen_today("2026-12-31"):
+			sub.process(posting_date="2026-12-31")
+		invoices = invoices_for(sub)
+		self.assertEqual(len(invoices), 1)
+		stub = invoices[0]
+		self.assertEqual(getdate(stub.posting_date), getdate("2026-12-31"))  # == today, never in the future
+		self.assert_period(stub, "2026-10-02", "2026-12-31")
+		self.assertEqual(
+			stub.items[0].rate, flt(900 * 91 / 365 * 12 * 0.75, 2)
+		)  # Month plan on the Year grid
+		self.assertEqual(sub.status, "Active")
+		sub.reload()
+		self.assert_current_period(sub, "2027-01-01", "2027-12-31")
+
+	def test_process_override_stays_whitelisted(self):
+		# core whitelists process (desk "Fetch Subscription Updates" -> run_doc_method -> is_whitelisted per
+		# function object), so the extend_doctype_class override must re-declare it
+		fn = frappe.new_doc("Subscription").process.__func__
+		self.assertEqual(fn.__module__, "automated_subscriptions.automated_subscriptions.custom.subscription")
+		self.assertIn(fn, frappe.whitelisted)
+		frappe.is_whitelisted(fn)  # must not raise PermissionError
 
 	# ---- blank plan row: a ValidationError, never an IndexError from the anchored period computation
 	def test_blank_plan_row_reports_mandatory_error(self):
