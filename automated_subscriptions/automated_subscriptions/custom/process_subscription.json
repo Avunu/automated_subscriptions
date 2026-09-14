@@ -1,0 +1,17 @@
+{
+    "custom_fields": [
+        {
+            "description": "Limit this run to the subscriptions of one customer.",
+            "dt": "Process Subscription",
+            "fieldname": "customer",
+            "fieldtype": "Link",
+            "insert_after": "subscription",
+            "label": "Customer",
+            "module": "Automated Subscriptions",
+            "options": "Customer"
+        }
+    ],
+    "doctype": "Process Subscription",
+    "property_setters": [],
+    "sync_on_migrate": 1
+}

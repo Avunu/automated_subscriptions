@@ -1,0 +1,27 @@
+{
+    "custom_fields": [
+        {
+            "dt": "Subscription",
+            "description": "What this subscription bills: a site, a domain, a seat pool. Free text.",
+            "fieldname": "service_identifier",
+            "fieldtype": "Data",
+            "in_list_view": 1,
+            "in_standard_filter": 1,
+            "insert_after": "party",
+            "label": "Service Identifier",
+            "module": "Automated Subscriptions"
+        }
+    ],
+    "doctype": "Subscription",
+    "property_setters": [
+        {
+            "doc_type": "Subscription",
+            "doctype_or_field": "DocType",
+            "module": "Automated Subscriptions",
+            "property": "search_fields",
+            "property_type": "Data",
+            "value": "party, service_identifier"
+        }
+    ],
+    "sync_on_migrate": 1
+}

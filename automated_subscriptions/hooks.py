@@ -7,10 +7,14 @@ app_license = "mit"
 required_apps = ["erpnext", "payments"]
 
 doc_events = {
+	"Customer": {
+		"validate": "automated_subscriptions.automated_subscriptions.custom.customer.validate",
+	},
 	"Sales Invoice": {
-		"on_submit": "automated_subscriptions.automated_subscriptions.custom.sales_invoice.subscription_payment_request"
-	}
+		"on_submit": "automated_subscriptions.automated_subscriptions.custom.sales_invoice.subscription_payment_request",
+	},
 }
 extend_doctype_class = {
-	"Subscription Settings": "automated_subscriptions.automated_subscriptions.custom.subscription_settings.SubscriptionSettings"
+	"Subscription": "automated_subscriptions.automated_subscriptions.custom.subscription.Subscription",
+	"Subscription Settings": "automated_subscriptions.automated_subscriptions.custom.subscription_settings.SubscriptionSettings",
 }
