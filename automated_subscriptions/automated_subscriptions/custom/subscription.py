@@ -8,6 +8,7 @@ from erpnext.accounts.doctype.subscription.subscription import is_prorate
 from erpnext.accounts.doctype.subscription_plan.subscription_plan import get_plan_rate
 from frappe import _
 from frappe.model.meta import get_field_precision
+from frappe.query_builder.functions import Max, Min
 from frappe.types import DF
 from frappe.utils import add_days, add_to_date, cint, escape_html, flt, getdate, nowdate
 
@@ -62,6 +63,58 @@ def _submit_suppressed(subscription):
 		yield
 	finally:
 		subscription.submit_invoice = saved
+
+
+def _line_periods(subscription: str) -> dict[str, frappe._dict]:
+	"""Per Sales Invoice, the window this subscription's own lines bill on it (NULL when the lines carry none)."""
+	sii = frappe.qb.DocType("Sales Invoice Item")
+	rows = (
+		frappe.qb.from_(sii)
+		.select(
+			sii.parent,
+			Min(sii.subscription_period_start).as_("period_start"),
+			Max(sii.subscription_period_end).as_("period_end"),
+		)
+		.where((sii.parenttype == "Sales Invoice") & (sii.subscription == subscription))
+		.groupby(sii.parent)
+	).run(as_dict=True)
+	return {row.parent: row for row in rows}
+
+
+def billing_invoices(subscription: str) -> list[frappe._dict]:
+	"""Every non-return Sales Invoice that bills `subscription` by header link *or* line link, any docstatus.
+
+	Each row carries core's header dates plus this subscription's own `period_start` / `period_end` on that
+	invoice (the header dates when its lines carry none: pre-migration rows, stock header-only invoices)."""
+	line_periods = _line_periods(subscription)
+	si = frappe.qb.DocType("Sales Invoice")
+	links = si.subscription == subscription
+	if line_periods:
+		links = links | si.name.isin(list(line_periods))
+	rows = (
+		frappe.qb.from_(si)
+		.select(
+			si.name,
+			si.docstatus,
+			si.status,
+			si.posting_date,
+			si.due_date,
+			si.is_return,
+			si.from_date,
+			si.to_date,
+			si.creation,
+		)
+		.where((si.is_return == 0) & links)
+	).run(as_dict=True)
+	for row in rows:
+		lines = line_periods.get(row.name)
+		row.period_start = (lines and lines.period_start) or row.from_date
+		row.period_end = (lines and lines.period_end) or row.to_date
+	return rows
+
+
+def _date_key(value):
+	return getdate(value) if value else getdate("1900-01-01")
 
 
 class Subscription(BaseSubscription):
@@ -226,14 +279,11 @@ class Subscription(BaseSubscription):
 		a party that core's process_all reaches runs the whole party group; the siblings hit the run memo. After
 		a successful run every member falls through to core's process() on a reloaded copy for status
 		maintenance only (billed -> not due); a sub still due after the run (more than one period behind) gets
-		status maintenance only too and waits for the next daily run, as stock bills one period per run. Note
-		that this copy has no `consolidation_current_invoice` flag, so until PR 4's line-aware
-		`get_current_invoice` any member whose most recent header-linked invoice is not its own current one --
-		sub[k>0] (no header link on the sink) AND the header owner sub[0] whenever a sibling's longer period
-		widened the sink's to_date past sub[0]'s own period end (e.g. monthly + yearly: core orders by header
-		to_date desc, so the January sink outranks February's invoice for the rest of the year) -- is
-		status-evaluated against the wrong invoice's status/due_date here and on every later daily run:
-		PR 3 must not go live for a consolidating customer without PR 4.
+		status maintenance only too and waits for the next daily run, as stock bills one period per run. This
+		copy has no `consolidation_current_invoice` flag: the line-aware get_current_invoice below (header or
+		line link, ordered by this sub's own line period end) is what makes its status pass -- and every later
+		daily run's -- see the sink instead of sub[k>0]'s previous invoice or, for the header owner, a
+		sibling-widened sink outranking its own later invoices.
 		A failed group raises so no member is billed on its own. Core's trailing save() persists the healed
 		period on the delegated path only because the realignment is repeated after the reload."""
 		if self._billing_profile() is not None:
@@ -283,58 +333,98 @@ class Subscription(BaseSubscription):
 		return super().process(posting_date)  # billed -> not due -> status maintenance only
 
 	def get_current_invoice(self):
-		"""Run-scoped guard for the runner's own doc copies only: for the rest of that process() call that put
-		this sub's lines on the consolidation sink, the sink *is* the current invoice (core's header-only lookup
-		would return the sub's previous invoice or, for the header owner, a sibling-widened sink whose to_date
-		outranks this sub's later invoices and, past grace with cancel_after_grace, cancel the subscription
-		it just billed). Every other status pass (the delegating copy in process(), later daily runs, desk
-		Fetch Subscription Updates) uses core's header-only lookup until PR 4's line-aware body, which keeps
-		this guard first."""
+		"""The most recent invoice that bills this subscription: header link *or* a line link (DECISIONS.md D-10).
+
+		The run-scoped guard stays first: for the rest of the process() call that put this sub's lines on the
+		consolidation sink, the sink *is* the current invoice (the runner's own doc copies only).
+
+		Ordered by this sub's own line period end, not the header to_date: a monthly sub sharing January's
+		consolidated invoice with a yearly sub would otherwise see the January sink (to_date Dec 31) outrank its
+		February invoice for the rest of the year and be status-evaluated against the wrong due date. Tie-breaks:
+		posting_date keeps a late fire ahead of a stale draft; docstatus / creation prefer the submitted, newest
+		amendment. Credit notes are excluded (their header period is NULL today; the exclusion is load-bearing
+		once PR 5 stamps the credited window on them). Lines without a period (pre-migration rows, stock
+		header-only invoices) fall back to the header to_date, i.e. core's ordering. Supplier subs go to core."""
 		sink = self.flags.get("consolidation_current_invoice")
 		if sink is not None:
 			return sink
-		return super().get_current_invoice()
+		if self.party_type != "Customer":
+			return super().get_current_invoice()
+		rows = [row for row in billing_invoices(self.name) if row.docstatus < 2]
+		if not rows:
+			return None
+		latest = max(
+			rows,
+			key=lambda row: (
+				_date_key(row.period_end),
+				_date_key(row.posting_date),
+				row.docstatus,
+				row.creation,
+			),
+		)
+		return frappe.get_doc("Sales Invoice", latest.name)
+
+	@property
+	def invoices(self):
+		"""Every non-return invoice billing this subscription (header or line link), all docstatuses like core,
+		oldest period first. Rows carry core's header from_date / to_date plus this sub's own period_start /
+		period_end (header dates when the lines carry none). Supplier subs go to core."""
+		if self.party_type != "Customer":
+			return super().invoices
+		return sorted(
+			billing_invoices(self.name),
+			key=lambda row: (_date_key(row.period_start), _date_key(row.posting_date), row.creation),
+		)
+
+	def has_outstanding_invoice(self):
+		"""Submitted, non-return invoices billing this subscription that are neither Paid nor Credit Note Issued.
+
+		Core counts `status != 'Paid'` on the header link: a Credit Note (status Return) would count forever and
+		a fully settled original re-stamped `Credit Note Issued` (core set_status tests it before Paid) would keep
+		every subscription on a consolidated invoice outstanding for good. Supplier subs go to core."""
+		if self.party_type != "Customer":
+			return super().has_outstanding_invoice()
+		return sum(
+			1
+			for row in billing_invoices(self.name)
+			if row.docstatus == 1 and row.status not in ("Paid", "Credit Note Issued")
+		)
+
+	@staticmethod
+	def is_paid(invoice) -> bool:
+		"""Core: status == Paid. A fully credited invoice is `Credit Note Issued`; without this every sub on it
+		would be "past due" -> grace -> Unpaid / Cancelled (current_invoice_is_past_due)."""
+		return invoice.status in ("Paid", "Credit Note Issued")
 
 	def is_current_invoice_generated(self, _current_start_date=None, _current_end_date=None):
-		"""Core keys this on the invoice header link. A consolidated member (sub[k>0]) has no header link, and
-		core's process() skips the period advance on an end_date sub's final period (the `if self.end_date`
-		return branch), so the header rule alone would bill that period again on the next run. Fall back to
-		the sub's own engine line for the period on a live, non-return invoice (the draft sink included, for
-		the in-lock re-check); PR 4 (DECISIONS.md D-10) makes the line window the primary rule. Stock subs
-		whose period advanced normally get core's answer: a line for the *current* period only exists once it
-		was billed.
+		"""Core: the current invoice's header posting_date lies inside the period. On a consolidated invoice the
+		posting_date is sub[0]'s period start, so a member with a different current_invoice_start (a stub, or a
+		member unblocked later) would fail that check and be billed again by the runner's in-lock re-check. Key
+		on this sub's own line period start instead: every engine line carries subscription_period_start ==
+		current_invoice_start at generation, so "start inside the window" is the exact analogue of core's rule.
+		Lines without a period (pre-migration rows, stock header-only invoices) fall back to posting_date, i.e.
+		core's rule. Supplier subs go to core.
 
-		Deliberate stock-path deviation: a non-consolidating Customer sub billed at "Days before the current
-		subscription period" whose end_date makes the period final has a header posting_date before the period
-		start, so core re-bills that period on every later run inside its one-cycle window; the line fallback
-		bills it once (DECISIONS.md D-10)."""
-		if super().is_current_invoice_generated(_current_start_date, _current_end_date):
-			return True
-		if self.party_type != "Customer" or not self.name:
-			return False
+		Deliberate stock-path deviation (DECISIONS.md D-10): a non-consolidating Customer sub billed at "Days
+		before the current subscription period" whose end_date makes the period final has a header posting_date
+		before the period start, so core re-bills that period on every later run inside its one-cycle window;
+		the line rule bills it once."""
+		if self.party_type != "Customer":
+			return super().is_current_invoice_generated(_current_start_date, _current_end_date)
 		if not (_current_start_date and _current_end_date):
 			_current_start_date, _current_end_date = self._get_subscription_period(
 				date=add_days(self.current_invoice_end, 1)
 			)
-		si = frappe.qb.DocType("Sales Invoice")
-		sii = frappe.qb.DocType("Sales Invoice Item")
-		rows = (
-			frappe.qb.from_(sii)
-			.join(si)
-			.on(si.name == sii.parent)
-			.select(sii.name)
-			.where(
-				(sii.parenttype == "Sales Invoice")
-				& (sii.subscription == self.name)
-				& (si.docstatus < 2)
-				& (si.is_return == 0)
-				& (sii.subscription_period_start >= getdate(_current_start_date))
-				& (sii.subscription_period_start <= getdate(_current_end_date))
-			)
-			.limit(1)
-			.run()
-		)
-		return bool(rows)
+		invoice = self.current_invoice
+		if not invoice:
+			return False
+		starts = [
+			d.subscription_period_start
+			for d in invoice.get("items") or []
+			if d.get("subscription") == self.name and d.get("subscription_period_start")
+		]
+		anchor = min(starts) if starts else invoice.posting_date  # legacy / stock invoice -> core's rule
+		return getdate(_current_start_date) <= getdate(anchor) <= getdate(_current_end_date)
 
 	def create_invoice(self, from_date=None, to_date=None, posting_date=None):
 		"""Outside a consolidation run (or for a non-consolidating customer): the standalone invoice. Inside a

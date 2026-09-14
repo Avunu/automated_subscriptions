@@ -80,11 +80,9 @@ class TestFields(IntegrationTestCase):
 			self.assertEqual(field.no_copy, 0)
 
 		self.assertTrue(frappe.db.has_index("tabSales Invoice Item", "subscription_index"))
-		self.assertTrue(
-			frappe.db.sql("SHOW INDEX FROM `tabSales Invoice Item` WHERE Column_name='subscription'")
-		)
+		self.assertIsNotNone(frappe.db.get_column_index("tabSales Invoice Item", "subscription"))
 		# header index from patches.v1_1.add_sales_invoice_subscription_index
-		self.assertTrue(frappe.db.sql("SHOW INDEX FROM `tabSales Invoice` WHERE Column_name='subscription'"))
+		self.assertIsNotNone(frappe.db.get_column_index("tabSales Invoice", "subscription"))
 		self.assertEqual(frappe.get_meta("Sales Invoice").get_field("subscription").search_index, 1)
 		# fresh installs never run patches (set_all_patches_as_completed): the same function is the after_install hook
 		self.assertIn(
@@ -216,10 +214,10 @@ class TestFields(IntegrationTestCase):
 	def test_materialise_defaults_repairs_a_null_row(self):
 		# a single saved while the field still loaded as None persists a NULL tabSingles row (update_single)
 		frappe.db.delete("Singles", {"doctype": "Subscription Settings", "field": "mid_term_billing_mode"})
-		frappe.db.sql(
-			"insert into `tabSingles` (doctype, field, value) values (%s, %s, NULL)",
-			("Subscription Settings", "mid_term_billing_mode"),
-		)
+		singles = frappe.qb.DocType("Singles")
+		frappe.qb.into(singles).columns(singles.doctype, singles.field, singles.value).insert(
+			"Subscription Settings", "mid_term_billing_mode", None
+		).run()
 		frappe.clear_document_cache("Subscription Settings", "Subscription Settings")
 
 		materialise_defaults()

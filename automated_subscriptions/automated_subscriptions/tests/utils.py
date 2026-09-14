@@ -36,3 +36,21 @@ def frozen_today(date_str):
 	frozen = datetime.datetime.combine(getdate(date_str), datetime.time(10, 0, 0, 123456))
 	with patch("frappe.utils.data.now_datetime", return_value=frozen):
 		yield frozen
+
+
+def make_payment_terms_template(name, credit_days):
+	"""One-row template, 100 % due `credit_days` after the invoice date."""
+	if frappe.db.exists("Payment Terms Template", name):
+		return name
+	doc = frappe.new_doc("Payment Terms Template")
+	doc.template_name = name
+	doc.append(
+		"terms",
+		{
+			"invoice_portion": 100,
+			"credit_days": credit_days,
+			"due_date_based_on": "Day(s) after invoice date",
+		},
+	)
+	doc.insert(ignore_permissions=True)
+	return doc.name

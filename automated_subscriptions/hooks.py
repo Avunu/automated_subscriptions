@@ -21,6 +21,7 @@ doc_events = {
 	"Sales Invoice": {
 		"before_validate": "automated_subscriptions.automated_subscriptions.custom.sales_invoice.apply_subscription_billing_policy",
 		"on_submit": "automated_subscriptions.automated_subscriptions.custom.sales_invoice.subscription_payment_request",
+		"on_cancel": "automated_subscriptions.automated_subscriptions.custom.sales_invoice.refresh_subscriptions_on_cancel",
 	},
 }
 extend_doctype_class = {

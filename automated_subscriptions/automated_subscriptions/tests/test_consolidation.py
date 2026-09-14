@@ -1,4 +1,3 @@
-import unittest
 from unittest.mock import patch
 
 import filelock as filelock_lib
@@ -370,13 +369,11 @@ class TestConsolidation(IntegrationTestCase):
 			self.assertEqual(stock.status, consolidated.status)
 			self.assertIsNone(stock.cancelation_date)
 
-	@unittest.expectedFailure
 	def test_grace_period_after_run_needs_pr4(self):
 		"""The run-scoped guard protects the runner's own doc copies only. The delegating copy in process() and
-		every later daily run go through core's header-only get_current_invoice for sub[k>0] (and for sub[0] once
-		a sibling's longer period has widened the sink's to_date), which returns the wrong invoice and cancels
-		it. PR 4's line-aware lookup closes this: drop the decorator there.
-		Until then no customer may carry consolidate_subscription_invoices = 1 on a site without PR 4."""
+		every later daily run have no flag: with core's header-only get_current_invoice, sub[k>0] (and sub[0]
+		once a sibling's longer period has widened the sink's to_date) would be status-evaluated against the
+		wrong invoice and cancelled. The line-aware lookup (PR 4, DECISIONS.md D-10) sees the sink instead."""
 		today = self.GRACE_TODAY
 		a, b, a2, b2 = self._grace_scenario()
 
