@@ -197,6 +197,10 @@ class TestFields(IntegrationTestCase):
 		frappe.db.set_single_value(
 			"Subscription Settings", "auto_charge_max_lateness_days", 7, update_modified=False
 		)
+		# the desk writes '' for a deliberately cleared Select: that is a saved value, not a missing row
+		frappe.db.set_single_value(
+			"Subscription Settings", "mid_term_billing_mode", "", update_modified=False
+		)
 		frappe.clear_document_cache("Subscription Settings", "Subscription Settings")
 
 		materialise_defaults()
@@ -205,8 +209,28 @@ class TestFields(IntegrationTestCase):
 		settings = get_settings()
 		self.assertEqual(settings.annual_discount_percentage, 25.0)
 		self.assertEqual(settings.credit_note_on_cancellation, 1)
-		self.assertEqual(settings.mid_term_billing_mode, "Immediate")
+		self.assertEqual(settings.mid_term_billing_mode, "Immediate")  # reader fallback only
 		self.assertEqual(settings.auto_charge_max_lateness_days, 7)
+		self.assertEqual(frappe.db.get_singles_dict("Subscription Settings").get("mid_term_billing_mode"), "")
+
+	def test_materialise_defaults_repairs_a_null_row(self):
+		# a single saved while the field still loaded as None persists a NULL tabSingles row (update_single)
+		frappe.db.delete("Singles", {"doctype": "Subscription Settings", "field": "mid_term_billing_mode"})
+		frappe.db.sql(
+			"insert into `tabSingles` (doctype, field, value) values (%s, %s, NULL)",
+			("Subscription Settings", "mid_term_billing_mode"),
+		)
+		frappe.clear_document_cache("Subscription Settings", "Subscription Settings")
+
+		materialise_defaults()
+
+		self.assertEqual(
+			frappe.db.get_single_value("Subscription Settings", "mid_term_billing_mode", cache=False),
+			"Immediate",
+		)
+		self.assertEqual(
+			frappe.get_single("Subscription Settings").get_valid_dict()["mid_term_billing_mode"], "Immediate"
+		)
 
 	def test_customer_validate_rules(self):
 		name = "_Test AS Anniversary"

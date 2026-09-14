@@ -47,10 +47,12 @@ def materialise_defaults() -> None:
 	(frappe/model/document.py:256-266); on a site that has saved the single once, a field added later loads as
 	None and the next save() persists 0 / 0.0 (document.py get_valid_dict -> update_single), silently turning
 	25 % / checked / 30 into 0. Registered as after_sync (install) and after_migrate, both of which run after
-	sync_customizations has created the fields. Idempotent: an existing row is never overwritten and
-	`modified` is left alone. Uses uncached meta because the fields may have been created in this same run."""
+	sync_customizations has created the fields. Idempotent: an existing row is never overwritten (a row whose
+	value is NULL is treated as missing and filled) and `modified` is left alone. Uses uncached meta because the
+	fields may have been created in this same run."""
 	meta = frappe.get_meta(DOCTYPE, cached=False)
-	rows = frappe.db.get_singles_dict(DOCTYPE)
+	# a NULL row (a doc saved while the field still loaded as None) counts as missing; '' is a saved value
+	rows = {k: v for k, v in frappe.db.get_singles_dict(DOCTYPE).items() if v is not None}
 	missing = {
 		df.fieldname: df.default
 		for df in meta.fields
