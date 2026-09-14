@@ -11,7 +11,8 @@ class ProcessSubscription(BaseProcessSubscription):
 
 	Without a customer the stock fan-out runs (every non-cancelled subscription, enqueued in batches of 500).
 	With a customer the party's subscriptions are processed synchronously in creation order: the first
-	consolidating one delegates to the runner, the rest hit the run memo. The document is committed before
+	consolidating one delegates to the runner, the rest hit the run memo: the memo is cleared per submitted
+	document. The document is committed before
 	process_all runs, because process_all commits per subscription and does a full frappe.db.rollback() on
 	the first ValidationError; the stock fan-out never needs this because it only enqueues. Per-subscription
 	failures are logged by process_all, never surfaced as a submit error. A posting_date in the past remains
@@ -37,4 +38,13 @@ class ProcessSubscription(BaseProcessSubscription):
 			# Tests keep the class transaction open; core's own tests stub frappe.db.rollback for the same
 			# reason.
 			frappe.db.commit()
+		# One submitted document is one run. The run memo (billing/runner.py _run_ctx) lives on frappe.local, which a
+		# request / RQ job / bench execute rebuilds but a bench console or a long script keeps for its whole lifetime:
+		# a second submit for the same customer and posting date would otherwise hit the previous run's "ok" (status
+		# maintenance only, so a sub more than one period behind never gets its next period) or sticky "failed"
+		# (every member raises even after the cause was fixed) instead of re-checking the rows. Never touch an
+		# active group (the customer path is never entered inside the runner).
+		ctx = getattr(frappe.local, "consolidated_billing", None)
+		if ctx is not None and ctx.active is None:
+			ctx.done.clear()
 		process_all(names, self.posting_date)

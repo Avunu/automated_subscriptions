@@ -18,6 +18,14 @@ Replay trap (core semantics, unchanged here): `set_subscription_status` compares
 against *today*, not the run's posting date, so replaying old periods (Process Subscription with a past posting
 date) sets Unpaid / Cancelled exactly as stock does. Run migration replays with `cancel_after_grace = 0` and never
 trust statuses produced by a replay (DECISIONS.md Q-10).
+
+Memo lifetime: the run memo (`_run_ctx().done`) is scoped to `frappe.local`, i.e. one HTTP request, one RQ job or
+one `bench execute`. A `bench console` or a long script keeps it for the whole session, so a second `process_all` /
+`Subscription.process()` for the same party and posting date would see the earlier verdict ("ok": status
+maintenance only, the next elapsed period is not billed; "failed": every member raises). Process Subscription's
+customer path clears it per submitted document; a script that calls `process_all` directly must set
+`frappe.local.consolidated_billing = None` between runs. `run_consolidated_billing` itself never consults the memo
+(it re-checks the rows under the lock).
 """
 
 import contextlib
@@ -142,8 +150,7 @@ def run_consolidated_billing(
 	dry_run = bool(sbool(dry_run))
 	lock_timeout = flt(lock_timeout)
 	names = _candidate_subscriptions(party, party_type, company)
-	groups = _group_due(names, run_posting_date)
-	results = []
+	groups, results = _group_due(names, run_posting_date)  # scan skips are reported like group failures
 	for key, sub_names in groups:
 		try:
 			summary = _run_group(key, sub_names, run_posting_date, dry_run=dry_run, lock_timeout=lock_timeout)
@@ -173,7 +180,11 @@ def run_consolidated_billing(
 def preview_consolidated_billing(
 	posting_date=None, party=None, party_type="Customer", company=None
 ) -> list[dict]:
-	"""Dry run: the real path up to (not including) submission, then rolled back to the savepoint."""
+	"""Dry run: the real path up to (not including) submission, then rolled back to the savepoint.
+
+	Outside tests every dry-run group ends with a full `frappe.db.rollback()` (rollback-to-savepoint keeps
+	InnoDB row locks); anything uncommitted in the caller's session before the call is discarded — commit
+	first from a console."""
 	frappe.has_permission("Subscription", "read", throw=True)
 	return run_consolidated_billing(
 		posting_date, party=party, party_type=party_type, company=company, dry_run=True
@@ -224,16 +235,50 @@ def _is_due(sub, run_posting_date) -> bool:
 	) and sub.can_generate_new_invoice(run_posting_date)
 
 
-def _group_due(names, run_posting_date) -> list[tuple[GroupKey, list[str]]]:
+def _group_due(names, run_posting_date) -> tuple[list[tuple[GroupKey, list[str]]], list[dict]]:
+	"""Bucket the due candidates by group key; a candidate that cannot even be evaluated (legacy Week/Day or
+	non-divisor plan under an anchored customer, an Anniversary customer whose date was blanked by a db write)
+	is logged and skipped so the remaining candidates and parties are still grouped and billed. Skipping is
+	safe: every scan-time error is raised again by that sub's own delegating process() before any generation
+	branch, so it is never billed standalone; it only stops poisoning its siblings (review round R2-02)."""
 	groups: dict[GroupKey, list[str]] = {}
+	errors: list[dict] = []
 	for name in names:
-		sub = frappe.get_doc("Subscription", name)
-		sub._realign_current_period()  # before the trigger / cap evaluation, like the mixin's process()
-		if not _is_due(sub, run_posting_date):
+		try:
+			sub = frappe.get_doc("Subscription", name)
+			sub._realign_current_period()  # before the trigger / cap evaluation, like the mixin's process()
+			if not _is_due(sub, run_posting_date):
+				continue
+			key = group_key(sub, run_posting_date)
+		# process_all's isolation class; the engine's errors are subclasses, and so are core's own frappe.throw
+		# (can_generate_new_invoice -> validate_plans_billing_cycle) and DoesNotExistError (deleted mid-scan)
+		except frappe.ValidationError as e:
+			_log_scan_failure(name, e)
+			errors.append(
+				{
+					"company": None,
+					"party_type": "Customer",
+					"party": frappe.db.get_value("Subscription", name, "party"),
+					"posting_date": str(run_posting_date),
+					"invoice": None,
+					"subscriptions": [name],
+					"errors": str(e),
+				}
+			)
 			continue
-		groups.setdefault(group_key(sub, run_posting_date), []).append(sub.name)
+		groups.setdefault(key, []).append(sub.name)
 	# ordered by (party, effective_posting_date); the stable sort keeps creation order inside a group
-	return sorted(groups.items(), key=lambda item: (item[0][2], item[0][3]))
+	return sorted(groups.items(), key=lambda item: (item[0][2], item[0][3])), errors
+
+
+def _log_scan_failure(name, exc) -> None:
+	with contextlib.suppress(Exception):  # logging must never replace the error being handled
+		frappe.log_error(
+			title=f"Consolidated billing scan failed: {name}",
+			message=frappe.get_traceback(with_context=True) or f"{type(exc).__name__}: {exc}",
+			reference_doctype="Subscription",
+			reference_name=name,
+		)
 
 
 # ---- one party group, inside lock + savepoint --------------------------------------------------------------
@@ -258,8 +303,16 @@ def _run_group(key, sub_names, run_posting_date, *, dry_run, lock_timeout):
 				subs = [frappe.get_doc("Subscription", name, for_update=True) for name in sub_names]
 				for sub in subs:
 					sub._realign_current_period()
-				skipped = [sub.name for sub in subs if not _is_due(sub, run_posting_date)]
-				subs = [sub for sub in subs if sub.name not in skipped]
+				skipped = [(sub.name, "not due") for sub in subs if not _is_due(sub, run_posting_date)]
+				subs = [sub for sub in subs if sub.name not in {name for name, _ in skipped}]
+				# a row edited between the scan and the lock (tax template, days_until_due, company, discounts,
+				# plan currency, generate_invoice_at...) may no longer share the group's header profile: leave it
+				# for the next run under its new key instead of absorbing it under sub[0]'s header (or, as sub[0],
+				# stamping its new header on every member). No-op without an edit: the key is deterministic.
+				skipped += [
+					(sub.name, "regrouped") for sub in subs if group_key(sub, run_posting_date) != key
+				]
+				subs = [sub for sub in subs if sub.name not in {name for name, _ in skipped}]
 				if not subs:
 					frappe.db.release_savepoint(sp)
 					sp_open = False
@@ -281,6 +334,14 @@ def _run_group(key, sub_names, run_posting_date, *, dry_run, lock_timeout):
 				if dry_run:
 					frappe.db.rollback(save_point=sp)
 					sp_open = False
+					if not frappe.in_test:
+						# rollback-to-savepoint undoes the rows but InnoDB keeps every explicit lock taken after
+						# the savepoint (the for_update reads, core save()'s UPDATE on the subscription, the
+						# naming-series row of the draft sink); a console / script preview would hold them until
+						# its session ends and stall the daily job, desk saves and every Sales Invoice insert.
+						# Nothing is pending in a dry run (no commit precedes the group), so a full rollback is
+						# free; it also drops after_commit callbacks queued by the rolled-back draft.
+						frappe.db.rollback()
 				else:
 					frappe.db.release_savepoint(sp)
 					sp_open = False
@@ -398,7 +459,7 @@ def _summarise(sink, run, skipped) -> dict:
 			}
 			for row in sink.payment_schedule
 		],
-		"skipped": [{"subscription": name, "reason": "not due"} for name in skipped],
+		"skipped": [{"subscription": name, "reason": reason} for name, reason in skipped],
 		"errors": None,
 	}
 	if run.dry_run:

@@ -228,8 +228,12 @@ class Subscription(BaseSubscription):
 		maintenance only (billed -> not due); a sub still due after the run (more than one period behind) gets
 		status maintenance only too and waits for the next daily run, as stock bills one period per run. Note
 		that this copy has no `consolidation_current_invoice` flag, so until PR 4's line-aware
-		`get_current_invoice` a sub[k>0] with an older *header* invoice past grace is set Unpaid/Cancelled here
-		exactly as on any later daily run: PR 3 must not go live for a consolidating customer without PR 4.
+		`get_current_invoice` any member whose most recent header-linked invoice is not its own current one --
+		sub[k>0] (no header link on the sink) AND the header owner sub[0] whenever a sibling's longer period
+		widened the sink's to_date past sub[0]'s own period end (e.g. monthly + yearly: core orders by header
+		to_date desc, so the January sink outranks February's invoice for the rest of the year) -- is
+		status-evaluated against the wrong invoice's status/due_date here and on every later daily run:
+		PR 3 must not go live for a consolidating customer without PR 4.
 		A failed group raises so no member is billed on its own. Core's trailing save() persists the healed
 		period on the delegated path only because the realignment is repeated after the reload."""
 		if self._billing_profile() is not None:
@@ -249,7 +253,11 @@ class Subscription(BaseSubscription):
 			# no company filter: a blank-company sub (core's backward-compat case) must be visited and grouped
 			# under the default company, exactly as group_key does; the memo key above uses the same fallback
 			run_consolidated_billing(posting_date, party=self.party, party_type=self.party_type)
-			state = ctx.done.get(key, "ok")  # the runner records "ok"/"failed"; it never re-raises per group
+			# the runner records "ok"/"failed" per visited party and never re-raises per group; when the party had
+			# no due group at all it records nothing, so memoise "ok" here or every sibling in the same process_all
+			# job repeats the full candidate scan (O(N^2) document loads per party per day). setdefault never
+			# overwrites a "failed" verdict, and a party-scoped lock timeout raises above before reaching this line.
+			state = ctx.done.setdefault(key, "ok")
 		if state == "failed":
 			raise ConsolidatedBillingError(
 				_(
@@ -277,7 +285,8 @@ class Subscription(BaseSubscription):
 	def get_current_invoice(self):
 		"""Run-scoped guard for the runner's own doc copies only: for the rest of that process() call that put
 		this sub's lines on the consolidation sink, the sink *is* the current invoice (core's header-only lookup
-		would return the sub's previous invoice and, past grace with cancel_after_grace, cancel the subscription
+		would return the sub's previous invoice or, for the header owner, a sibling-widened sink whose to_date
+		outranks this sub's later invoices and, past grace with cancel_after_grace, cancel the subscription
 		it just billed). Every other status pass (the delegating copy in process(), later daily runs, desk
 		Fetch Subscription Updates) uses core's header-only lookup until PR 4's line-aware body, which keeps
 		this guard first."""
@@ -293,7 +302,12 @@ class Subscription(BaseSubscription):
 		the sub's own engine line for the period on a live, non-return invoice (the draft sink included, for
 		the in-lock re-check); PR 4 (DECISIONS.md D-10) makes the line window the primary rule. Stock subs
 		whose period advanced normally get core's answer: a line for the *current* period only exists once it
-		was billed."""
+		was billed.
+
+		Deliberate stock-path deviation: a non-consolidating Customer sub billed at "Days before the current
+		subscription period" whose end_date makes the period final has a header posting_date before the period
+		start, so core re-bills that period on every later run inside its one-cycle window; the line fallback
+		bills it once (DECISIONS.md D-10)."""
 		if super().is_current_invoice_generated(_current_start_date, _current_end_date):
 			return True
 		if self.party_type != "Customer" or not self.name:
