@@ -29,7 +29,10 @@ def make_anchored_customer(name, mode, anchor_date=None, interval=None, consolid
 def frozen_today(date_str):
 	"""Freeze nowdate()/today()/getdate(None)/now() for every importer of frappe.utils.data.
 
-	freezegun is not installed on this bench; patching now_datetime is enough for core subscription.py."""
-	frozen = datetime.datetime.combine(getdate(date_str), datetime.time(10))
+	freezegun is not installed on this bench; patching now_datetime is enough for core subscription.py.
+	The frozen instant carries non-zero microseconds: Document.check_if_latest compares cstr(db modified)
+	("... 10:00:00" for a whole second) with the string now() wrote ("... 10:00:00.000000"), and a save
+	followed by submit() under the freeze would raise TimestampMismatchError otherwise."""
+	frozen = datetime.datetime.combine(getdate(date_str), datetime.time(10, 0, 0, 123456))
 	with patch("frappe.utils.data.now_datetime", return_value=frozen):
 		yield frozen

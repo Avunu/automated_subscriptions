@@ -19,10 +19,12 @@ doc_events = {
 		"validate": "automated_subscriptions.automated_subscriptions.custom.customer.validate",
 	},
 	"Sales Invoice": {
+		"before_validate": "automated_subscriptions.automated_subscriptions.custom.sales_invoice.apply_subscription_billing_policy",
 		"on_submit": "automated_subscriptions.automated_subscriptions.custom.sales_invoice.subscription_payment_request",
 	},
 }
 extend_doctype_class = {
+	"Sales Invoice": "automated_subscriptions.automated_subscriptions.custom.sales_invoice.SalesInvoice",
 	"Subscription": "automated_subscriptions.automated_subscriptions.custom.subscription.Subscription",
 	"Subscription Settings": "automated_subscriptions.automated_subscriptions.custom.subscription_settings.SubscriptionSettings",
 }
