@@ -19,8 +19,8 @@
         },
         {
             "dt": "Subscription Settings",
-            "default": "25",
-            "description": "Discount applied when a monthly-priced plan is billed on a yearly term: yearly rate = monthly x 12 x (1 - discount).",
+            "default": "16.67",
+            "description": "Discount applied when a monthly-priced plan is billed on a yearly term: yearly rate = monthly x 12 x (1 - discount). 16.67% = two months free.",
             "fieldname": "annual_discount_percentage",
             "fieldtype": "Percent",
             "insert_after": "auto_billing_delay",

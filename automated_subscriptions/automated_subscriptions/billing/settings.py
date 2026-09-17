@@ -21,7 +21,7 @@ def get_settings() -> frappe._dict:
 	"""Subscription Settings with field defaults applied for rows that were never saved.
 
 	tabSingles has no row for a field until the single is saved once, and db.get_single_value casts
-	None -> 0 (frappe/database/database.py:878-923), which would turn a default of 25 into 0.
+	None -> 0 (frappe/database/database.py:878-923), which would turn a default of 16.67 into 0.
 	materialise_defaults() (after_sync / after_migrate) writes the rows so the desk form and a later save()
 	see the same values; this reader stays as the belt-and-braces fallback."""
 	rows = frappe.db.get_singles_dict(DOCTYPE)
@@ -46,7 +46,7 @@ def materialise_defaults() -> None:
 	Document.load_from_db applies new_doc defaults only while tabSingles has no row for the single at all
 	(frappe/model/document.py:256-266); on a site that has saved the single once, a field added later loads as
 	None and the next save() persists 0 / 0.0 (document.py get_valid_dict -> update_single), silently turning
-	25 % / checked / 30 into 0. Registered as after_sync (install) and after_migrate, both of which run after
+	16.67 % / checked / 30 into 0. Registered as after_sync (install) and after_migrate, both of which run after
 	sync_customizations has created the fields. Idempotent: an existing row is never overwritten (a row whose
 	value is NULL is treated as missing and filled) and `modified` is left alone. Uses uncached meta because the
 	fields may have been created in this same run."""

@@ -106,7 +106,7 @@ class TestFields(IntegrationTestCase):
 		frappe.clear_document_cache("Subscription Settings", "Subscription Settings")
 
 		settings = get_settings()
-		self.assertEqual(settings.annual_discount_percentage, 25.0)
+		self.assertEqual(settings.annual_discount_percentage, 16.67)
 		self.assertEqual(settings.credit_note_on_cancellation, 1)
 		self.assertEqual(settings.mid_term_billing_mode, "Immediate")
 		self.assertEqual(settings.auto_charge_max_lateness_days, 30)
@@ -121,12 +121,12 @@ class TestFields(IntegrationTestCase):
 		# setUp ran reset_settings() - a save() that does not touch our fields - on a site whose tabSingles
 		# already carries rows (materialise_defaults ran at migrate): the defaults must not collapse to 0
 		settings = get_settings()
-		self.assertEqual(settings.annual_discount_percentage, 25.0)
+		self.assertEqual(settings.annual_discount_percentage, 16.67)
 		self.assertEqual(settings.credit_note_on_cancellation, 1)
 		self.assertEqual(settings.mid_term_billing_mode, "Immediate")
 		self.assertEqual(settings.auto_charge_max_lateness_days, 30)
 		rows = frappe.db.get_singles_dict("Subscription Settings")
-		self.assertEqual(rows.get("annual_discount_percentage"), "25")
+		self.assertEqual(rows.get("annual_discount_percentage"), "16.67")
 		self.assertEqual(rows.get("credit_note_on_cancellation"), "1")
 		self.assertEqual(rows.get("mid_term_billing_mode"), "Immediate")
 		self.assertEqual(rows.get("auto_charge_max_lateness_days"), "30")
@@ -155,7 +155,7 @@ class TestFields(IntegrationTestCase):
 		materialise_defaults()
 
 		self.assertEqual(
-			frappe.db.get_single_value("Subscription Settings", "annual_discount_percentage"), 25
+			frappe.db.get_single_value("Subscription Settings", "annual_discount_percentage"), 16.67
 		)
 		self.assertEqual(
 			frappe.db.get_single_value("Subscription Settings", "credit_note_on_cancellation"), 1
@@ -167,7 +167,7 @@ class TestFields(IntegrationTestCase):
 			frappe.db.get_single_value("Subscription Settings", "auto_charge_max_lateness_days"), 30
 		)
 		valid = frappe.get_single("Subscription Settings").get_valid_dict()
-		self.assertEqual(valid["annual_discount_percentage"], 25.0)
+		self.assertEqual(valid["annual_discount_percentage"], 16.67)
 		self.assertEqual(valid["credit_note_on_cancellation"], 1)
 		self.assertEqual(valid["mid_term_billing_mode"], "Immediate")
 		self.assertEqual(valid["auto_charge_max_lateness_days"], 30)
@@ -183,7 +183,7 @@ class TestFields(IntegrationTestCase):
 		# a subsequent core save (reset_settings) keeps the values
 		reset_settings()
 		settings = get_settings()
-		self.assertEqual(settings.annual_discount_percentage, 25.0)
+		self.assertEqual(settings.annual_discount_percentage, 16.67)
 		self.assertEqual(settings.credit_note_on_cancellation, 1)
 		self.assertEqual(settings.mid_term_billing_mode, "Immediate")
 		self.assertEqual(settings.auto_charge_max_lateness_days, 30)
@@ -205,7 +205,7 @@ class TestFields(IntegrationTestCase):
 		materialise_defaults()
 
 		settings = get_settings()
-		self.assertEqual(settings.annual_discount_percentage, 25.0)
+		self.assertEqual(settings.annual_discount_percentage, 16.67)
 		self.assertEqual(settings.credit_note_on_cancellation, 1)
 		self.assertEqual(settings.mid_term_billing_mode, "Immediate")  # reader fallback only
 		self.assertEqual(settings.auto_charge_max_lateness_days, 7)
