@@ -27,7 +27,7 @@ class TestRunnerLock(IntegrationTestCase):
 	def test_lock_name_is_a_bare_path_component(self):
 		self.assertRegex(LOCK, r"^subbill-[0-9a-f]{16}$")
 		self.assertEqual(LOCK, party_lock_name("_Test Company", "Customer", "_Test Lock Customer"))
-		self.assertNotEqual(LOCK, party_lock_name("_Test Company", "Customer", "BJ's Raw Pet Food / X"))
+		self.assertNotEqual(LOCK, party_lock_name("_Test Company", "Customer", "_Test Lock Customer / X"))
 
 	def test_filelock_serialises_two_threads(self):
 		events = []
