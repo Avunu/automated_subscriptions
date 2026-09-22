@@ -4,7 +4,7 @@ authors = [
     { name = "Avunu LLC", email = "mail@avu.nu"}
 ]
 description = "Auto-billing with ERPNext Subscriptions using Frappe Payments"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 readme = "README.md"
 dynamic = ["version"]
 dependencies = [
@@ -25,7 +25,7 @@ skip = ["TYPE_CHECKING"]
 
 [tool.ruff]
 line-length = 110
-target-version = "py310"
+target-version = "py312"
 
 [tool.ruff.lint]
 select = [

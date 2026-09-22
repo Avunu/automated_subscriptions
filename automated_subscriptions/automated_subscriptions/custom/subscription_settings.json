@@ -16,9 +16,50 @@
             "insert_after": "sb_automated_subscriptions",
             "label": "Auto-billing Delay",
             "module": "Automated Subscriptions"
+        },
+        {
+            "dt": "Subscription Settings",
+            "default": "16.67",
+            "description": "Discount applied when a monthly-priced plan is billed on a yearly term: yearly rate = monthly x 12 x (1 - discount). 16.67% = two months free.",
+            "fieldname": "annual_discount_percentage",
+            "fieldtype": "Percent",
+            "insert_after": "auto_billing_delay",
+            "label": "Annual Discount Percentage",
+            "module": "Automated Subscriptions"
+        },
+        {
+            "dt": "Subscription Settings",
+            "default": "1",
+            "description": "On mid-term cancellation of an anchored or consolidated subscription, issue a Credit Note for the unused portion of the current period.",
+            "fieldname": "credit_note_on_cancellation",
+            "fieldtype": "Check",
+            "insert_after": "annual_discount_percentage",
+            "label": "Credit Note On Cancellation",
+            "module": "Automated Subscriptions"
+        },
+        {
+            "dt": "Subscription Settings",
+            "default": "Immediate",
+            "description": "For anchored or consolidated subscriptions added mid-term: bill the prorated stub as soon as the subscription is created (Immediate, stock behaviour) or leave it to the next scheduled run (Next Daily Run). Next Daily Run rejects start dates more than one billing cycle in the past.",
+            "fieldname": "mid_term_billing_mode",
+            "fieldtype": "Select",
+            "insert_after": "credit_note_on_cancellation",
+            "label": "Mid-term Billing Mode",
+            "module": "Automated Subscriptions",
+            "options": "Immediate\nNext Daily Run"
+        },
+        {
+            "dt": "Subscription Settings",
+            "default": "30",
+            "description": "A subscription invoice whose due date is more than this many days in the past is not auto-charged; its Payment Request is left as a draft for review.",
+            "fieldname": "auto_charge_max_lateness_days",
+            "fieldtype": "Int",
+            "insert_after": "mid_term_billing_mode",
+            "label": "Auto-charge Max Lateness (days)",
+            "module": "Automated Subscriptions"
         }
     ],
+    "doctype": "Subscription Settings",
     "property_setters": [],
-    "sync_on_migrate": 1,
-    "doctype": "Subscription Settings"
+    "sync_on_migrate": 1
 }

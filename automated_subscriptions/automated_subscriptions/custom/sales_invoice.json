@@ -1,0 +1,16 @@
+{
+    "custom_fields": [],
+    "doctype": "Sales Invoice",
+    "property_setters": [
+        {
+            "doc_type": "Sales Invoice",
+            "doctype_or_field": "DocField",
+            "field_name": "subscription",
+            "module": "Automated Subscriptions",
+            "property": "search_index",
+            "property_type": "Check",
+            "value": "1"
+        }
+    ],
+    "sync_on_migrate": 1
+}

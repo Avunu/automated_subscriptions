@@ -1,0 +1,64 @@
+{
+    "custom_fields": [
+        {
+            "dt": "Customer",
+            "fieldname": "subscription_billing_section",
+            "fieldtype": "Section Break",
+            "insert_after": "credit_limits",
+            "label": "Subscription Billing",
+            "module": "Automated Subscriptions"
+        },
+        {
+            "dt": "Customer",
+            "default": "0",
+            "description": "Bill every subscription of this customer that is due on the same day on one invoice.",
+            "fieldname": "consolidate_subscription_invoices",
+            "fieldtype": "Check",
+            "insert_after": "subscription_billing_section",
+            "label": "Consolidate Subscription Invoices",
+            "module": "Automated Subscriptions"
+        },
+        {
+            "dt": "Customer",
+            "description": "Blank keeps stock ERPNext behaviour (each subscription bills from its own start date). Calendar anchors every subscription to calendar months / calendar years (Jan 1). Anniversary anchors every subscription to the month and day (yearly) or day of month (monthly) of the anchor date.",
+            "fieldname": "subscription_billing_anchor_mode",
+            "fieldtype": "Select",
+            "insert_after": "consolidate_subscription_invoices",
+            "label": "Subscription Billing Anchor",
+            "module": "Automated Subscriptions",
+            "options": "\nAnniversary\nCalendar"
+        },
+        {
+            "dt": "Customer",
+            "fieldname": "subscription_billing_column",
+            "fieldtype": "Column Break",
+            "insert_after": "subscription_billing_anchor_mode",
+            "module": "Automated Subscriptions"
+        },
+        {
+            "dt": "Customer",
+            "depends_on": "eval:doc.subscription_billing_anchor_mode == \"Anniversary\"",
+            "description": "Billing periods end the day before this date's next occurrence. Only the month and day matter for yearly terms; only the day of month for monthly terms.",
+            "fieldname": "subscription_billing_anchor_date",
+            "fieldtype": "Date",
+            "insert_after": "subscription_billing_column",
+            "label": "Subscription Billing Anchor Date",
+            "mandatory_depends_on": "eval:doc.subscription_billing_anchor_mode == \"Anniversary\"",
+            "module": "Automated Subscriptions"
+        },
+        {
+            "dt": "Customer",
+            "depends_on": "eval:doc.subscription_billing_anchor_mode",
+            "description": "Blank follows each plan's own billing interval. Year bills monthly-priced plans once a year at 12 x monthly x (1 - Annual Discount Percentage).",
+            "fieldname": "subscription_billing_interval",
+            "fieldtype": "Select",
+            "insert_after": "subscription_billing_anchor_date",
+            "label": "Subscription Billing Interval",
+            "module": "Automated Subscriptions",
+            "options": "\nMonth\nYear"
+        }
+    ],
+    "doctype": "Customer",
+    "property_setters": [],
+    "sync_on_migrate": 1
+}

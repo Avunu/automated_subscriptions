@@ -1,0 +1,71 @@
+{
+    "custom_fields": [
+        {
+            "collapsible": 1,
+            "collapsible_depends_on": "eval:doc.subscription",
+            "dt": "Sales Invoice Item",
+            "fieldname": "subscription_billing_section",
+            "fieldtype": "Section Break",
+            "insert_after": "service_end_date",
+            "label": "Subscription",
+            "module": "Automated Subscriptions"
+        },
+        {
+            "dt": "Sales Invoice Item",
+            "fieldname": "subscription",
+            "fieldtype": "Link",
+            "insert_after": "subscription_billing_section",
+            "label": "Subscription",
+            "module": "Automated Subscriptions",
+            "no_copy": 0,
+            "options": "Subscription",
+            "print_hide": 1,
+            "read_only": 1,
+            "search_index": 1
+        },
+        {
+            "dt": "Sales Invoice Item",
+            "fieldname": "subscription_plan",
+            "fieldtype": "Link",
+            "insert_after": "subscription",
+            "label": "Subscription Plan",
+            "module": "Automated Subscriptions",
+            "no_copy": 0,
+            "options": "Subscription Plan",
+            "print_hide": 1,
+            "read_only": 1
+        },
+        {
+            "dt": "Sales Invoice Item",
+            "fieldname": "subscription_billing_column",
+            "fieldtype": "Column Break",
+            "insert_after": "subscription_plan",
+            "module": "Automated Subscriptions"
+        },
+        {
+            "depends_on": "eval:doc.subscription",
+            "dt": "Sales Invoice Item",
+            "fieldname": "subscription_period_start",
+            "fieldtype": "Date",
+            "insert_after": "subscription_billing_column",
+            "label": "Subscription Period Start",
+            "module": "Automated Subscriptions",
+            "no_copy": 0,
+            "read_only": 1
+        },
+        {
+            "depends_on": "eval:doc.subscription",
+            "dt": "Sales Invoice Item",
+            "fieldname": "subscription_period_end",
+            "fieldtype": "Date",
+            "insert_after": "subscription_period_start",
+            "label": "Subscription Period End",
+            "module": "Automated Subscriptions",
+            "no_copy": 0,
+            "read_only": 1
+        }
+    ],
+    "doctype": "Sales Invoice Item",
+    "property_setters": [],
+    "sync_on_migrate": 1
+}
