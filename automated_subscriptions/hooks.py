@@ -3,7 +3,7 @@ app_title = "Automated Subscriptions"
 app_publisher = "Avunu LLC"
 app_description = "Auto-billing with ERPNext Subscriptions using Frappe Payments"
 app_email = "mail@avu.nu"
-app_license = "mit"
+app_license = "MIT"
 required_apps = ["erpnext", "payments"]
 
 # Fresh installs mark all patches as completed without running them (frappe/installer.py

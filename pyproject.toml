@@ -6,6 +6,10 @@ authors = [
 description = "Auto-billing with ERPNext Subscriptions using Frappe Payments"
 requires-python = ">=3.12"
 readme = "README.md"
+license = { text = "MIT" }
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+]
 dynamic = ["version"]
 dependencies = [
     # "frappe~=15.0.0" # Installed and managed by bench.
