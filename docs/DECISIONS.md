@@ -7,12 +7,10 @@ deployment's data on 2026-09-14. It deliberately omits anything specific to one 
 pricing, subscription/invoice IDs, migration-run numbers) — that lives in the private app that consumes this
 engine, since this repo is public.
 
-**History note:** this file originally lived in a session-scoped scratchpad and was lost when the sandbox
-restarted; it was reconstructed from conversation history. A first reconstruction attempt put the full,
-unredacted record (including a deployment's customer-identifying specifics) in this public repo by mistake —
-caught and corrected before it was pushed. If you're reading this and wondering why some entries below feel
-abbreviated compared to what a commit message references, that's why: the specifics live in the private
-deployment repo, not here.
+**History note:** an earlier revision of this file carried deployment-specific detail (customer names, pricing,
+subscription and invoice IDs). It was scrubbed to the generic subset below, but that revision is still reachable in
+this repository's git history. Nothing in the current tree identifies a customer; the specifics live in the private
+app that consumes this engine.
 
 ## Deviations baked into the specs
 
