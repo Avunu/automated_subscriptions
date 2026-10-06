@@ -1,0 +1,10 @@
+{
+  "$schema": "./node_modules/@avunu/docusystem/config.schema.json",
+  "name": "Automated Subscriptions",
+  "tagline": "Automatic billing for ERPNext Subscriptions, with payment requests, billing anchors, proration, consolidated invoices, and credit notes.",
+  "slug": "automated_subscriptions",
+  "platform": "frappe",
+  "repo": "https://github.com/Avunu/automated_subscriptions",
+  "domain": "automated-subscriptions.avunu.net",
+  "license": "MIT"
+}
