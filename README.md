@@ -70,7 +70,7 @@ ERPNext behaviour.
 | Consolidate Subscription Invoices   | Bill every subscription of this customer that is due on the same day on one invoice. Off by default, including for existing customers.                                      |
 | Subscription Billing Anchor         | Blank: stock behaviour. **Calendar**: periods follow calendar months or years. **Anniversary**: periods follow the day (and, for yearly terms, the month) of the anchor date. |
 | Subscription Billing Anchor Date    | Required for Anniversary and cleared otherwise. Periods end the day before the date's next occurrence.                                                                      |
-| Subscription Billing Interval       | Blank: follow each plan's own interval. **Year**: bill monthly-priced plans once a year at 12 x monthly x (1 - Annual Discount Percentage).                                 |
+| Subscription Billing Interval       | Only shown, and kept, when an anchor is set. Blank: follow each plan's own interval. **Year**: bill monthly-priced plans once a year at 12 x monthly x (1 - Annual Discount Percentage). |
 
 Subscriptions also gain a free-text **Service Identifier** (what the subscription bills: a site, a domain, a seat
 pool). It is shown in the list view, searchable, and used as the invoice line description, which is what tells
