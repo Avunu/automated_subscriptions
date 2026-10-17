@@ -134,7 +134,7 @@ class Subscription(BaseSubscription):
 		except (
 			ValueError
 		) as e:  # Anniversary customer without a date (API/legacy write) -> never a bare exception
-			raise UnsupportedBillingGrid(_("Customer {0}: {1}").format(self.party, e)) from e
+			raise UnsupportedBillingGrid(_("Customer {0}: {1}").format(self.party, str(e))) from e
 
 	def is_consolidating(self) -> bool:
 		return is_consolidating_customer(self.party_type, self.party)
@@ -155,7 +155,7 @@ class Subscription(BaseSubscription):
 				discount_pct,
 			)
 		except ValueError as e:
-			raise UnsupportedBillingGrid(_("Subscription {0}: {1}").format(self.name or "", e)) from e
+			raise UnsupportedBillingGrid(_("Subscription {0}: {1}").format(self.name or "", str(e))) from e
 
 	def get_current_invoice_end(self, date=None):
 		"""Anchored: the day before the next anchor occurrence after `date` (a boundary date gets a full term).
@@ -233,7 +233,7 @@ class Subscription(BaseSubscription):
 			try:
 				factor = prorate_factor(grid, start, end, units, pct, prorate=bool(prorate))
 			except ValueError as e:
-				raise UnsupportedBillingGrid(_("Subscription {0}: {1}").format(self.name, e)) from e
+				raise UnsupportedBillingGrid(_("Subscription {0}: {1}").format(self.name, str(e))) from e
 			# positional like core; the third argument is `customer`
 			rate = flt(get_plan_rate(plan.plan, plan.qty, self.party, start, end, factor), precision)
 			if not rate:

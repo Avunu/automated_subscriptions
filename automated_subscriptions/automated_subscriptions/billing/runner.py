@@ -402,7 +402,7 @@ def _run_group(key, sub_names, run_posting_date, *, dry_run, lock_timeout):
 				if isinstance(e, ConsolidatedBillingError):
 					raise
 				raise ConsolidatedBillingError(
-					_("Consolidated billing for {0} failed: {1}").format(party, e)
+					_("Consolidated billing for {0} failed: {1}").format(party, str(e))
 				) from e
 			finally:
 				ctx.active = None  # never let the sink leak into the next group / sub
