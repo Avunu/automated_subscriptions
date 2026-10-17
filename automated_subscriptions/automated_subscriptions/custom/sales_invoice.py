@@ -67,7 +67,7 @@ class AutoSubSalesInvoice(BaseSalesInvoice):
 
 	# The rows carry this app's custom fields, which SalesInvoiceItem only declares the types of. Narrowing the
 	# element type of the invariant list is the point, so the checkers' override rule is silenced for it.
-	items: DF.Table[SalesInvoiceItem]  # pyright: ignore[reportIncompatibleVariableOverride]  # ty: ignore[invalid-attribute-override]
+	items: DF.Table[SalesInvoiceItem]  # pyright: ignore[reportIncompatibleVariableOverride]  # ty: ignore[invalid-attribute-override]  # the rows carry this app's custom fields
 
 	# core whitelists set_missing_values and the desk calls it via run_doc_method when is_pos is ticked
 	# (sales_invoice.js set_pos_data); is_whitelisted checks the resolved function object, so the override
