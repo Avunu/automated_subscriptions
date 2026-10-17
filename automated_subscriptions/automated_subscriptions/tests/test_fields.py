@@ -14,7 +14,16 @@ from automated_subscriptions.automated_subscriptions.billing.settings import (
 	get_settings,
 	materialise_defaults,
 )
-from automated_subscriptions.automated_subscriptions.tests.utils import make_anchored_customer
+from automated_subscriptions.automated_subscriptions.custom.sales_invoice_item import (
+	SalesInvoiceItem as SalesInvoiceItemShell,
+)
+from automated_subscriptions.automated_subscriptions.custom.subscription_settings import (
+	SubscriptionSettings as SubscriptionSettingsShell,
+)
+from automated_subscriptions.automated_subscriptions.tests.utils import (
+	get_subscription,
+	make_anchored_customer,
+)
 
 OUR_SETTINGS_FIELDS = (
 	"annual_discount_percentage",
@@ -84,14 +93,9 @@ class TestFields(IntegrationTestCase):
 
 		self.assertTrue(frappe.db.has_index("tabSales Invoice Item", "subscription_index"))
 		self.assertIsNotNone(frappe.db.get_column_index("tabSales Invoice Item", "subscription"))
-		# header index from patches.v1_1.add_sales_invoice_subscription_index
+		# header index from install.after_install (fresh sites) or the v1_1 patch (existing ones): test_install
 		self.assertIsNotNone(frappe.db.get_column_index("tabSales Invoice", "subscription"))
 		self.assertEqual(frappe.get_meta("Sales Invoice").get_field("subscription").search_index, 1)
-		# fresh installs never run patches (set_all_patches_as_completed): the same function is the after_install hook
-		self.assertIn(
-			"automated_subscriptions.patches.v1_1.add_sales_invoice_subscription_index.execute",
-			frappe.get_hooks("after_install", app_name="automated_subscriptions"),
-		)
 
 	def test_subscription_field_and_search_fields(self):
 		meta = frappe.get_meta("Subscription")
@@ -295,7 +299,7 @@ class TestFields(IntegrationTestCase):
 		finally:
 			frappe.flags.in_import = False
 
-		sub = frappe.get_doc("Subscription", created.name)
+		sub = get_subscription(created.name)
 		self.assertEqual(type(sub).__name__, "ExtendedSubscription")
 		self.assertTrue(hasattr(sub, "_billing_profile"))
 		self.assertIsNone(sub._billing_profile())
@@ -304,3 +308,14 @@ class TestFields(IntegrationTestCase):
 
 		cached = frappe.get_cached_doc("Subscription", created.name)
 		self.assertEqual(type(cached).__name__, "ExtendedSubscription")
+
+	def test_typing_shells_declare_real_fields(self):
+		"""The unregistered typing shells only declare custom-field types; each one must name a field that
+		exists, or the checker is reading fiction."""
+		for shell, doctype in (
+			(SubscriptionSettingsShell, "Subscription Settings"),
+			(SalesInvoiceItemShell, "Sales Invoice Item"),
+		):
+			meta = frappe.get_meta(doctype)
+			for fieldname in shell.__annotations__:
+				self.assertIsNotNone(meta.get_field(fieldname), f"{doctype}.{fieldname}")

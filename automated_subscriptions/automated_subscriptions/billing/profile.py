@@ -6,7 +6,9 @@ from datetime import date
 from typing import Literal
 
 import frappe
-from frappe.utils import cint, getdate
+from frappe.utils import cint
+
+from automated_subscriptions.automated_subscriptions.billing.dates import as_date
 
 CUSTOMER_FIELDS = (
 	"consolidate_subscription_invoices",
@@ -33,14 +35,13 @@ def profile_from_fields(fields) -> BillingProfile | None:
 	mode = (fields.get("subscription_billing_anchor_mode") or "").strip()
 	if not mode:
 		return None
+	interval = fields.get("subscription_billing_interval") or ""
 	if mode == "Calendar":
-		anchor = CALENDAR_ANCHOR
-	else:
-		raw = fields.get("subscription_billing_anchor_date")
-		if not raw:
-			raise ValueError("Anniversary anchoring needs subscription_billing_anchor_date")
-		anchor = getdate(raw)
-	return BillingProfile(mode, anchor, fields.get("subscription_billing_interval") or "")
+		return BillingProfile("Calendar", CALENDAR_ANCHOR, interval)
+	raw = fields.get("subscription_billing_anchor_date")
+	if not raw:
+		raise ValueError("Anniversary anchoring needs subscription_billing_anchor_date")
+	return BillingProfile("Anniversary", as_date(raw), interval)
 
 
 def get_billing_profile(party_type: str, party: str | None) -> BillingProfile | None:

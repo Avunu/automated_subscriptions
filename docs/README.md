@@ -15,7 +15,7 @@ customer; a customer with no engine fields set is billed by stock ERPNext.
 
 ## Requirements
 
-- Python 3.12 or newer
+- Python 3.14 or newer
 - Frappe and ERPNext version 16 (developed and tested against ERPNext 16.34.2 and Frappe 16.33.1; other versions
   are untested)
 - The [Frappe Payments](https://github.com/frappe/payments) app, with a Payment Gateway Account configured for
@@ -75,7 +75,8 @@ ERPNext behaviour.
 Subscriptions also gain a free-text **Service Identifier** (what the subscription bills: a site, a domain, a seat
 pool). It is shown in the list view, searchable, and used as the invoice line description, which is what tells
 the lines of a consolidated invoice apart. **Process Subscription** gains an optional **Customer** field to limit a
-run to one customer.
+run to one customer. Like a run without a customer, it is queued as a background job (long queue) once the
+document is submitted.
 
 ### Kill switch
 
@@ -155,6 +156,9 @@ already been credited is refused rather than credited twice.
   rejected as well. To load history, insert with `frappe.flags.in_import` set and replay the elapsed periods with
   Process Subscription and a past posting date.
 - Credit notes are not issued for subscriptions billed in arrears, and gateway refunds are out of scope.
+- With the stock Frappe Payments app, GoCardless charges a mandate but does not settle the invoice: its webhooks
+  only track mandates, so the Payment Entry for a collected payment is made by hand (or by a payments build that
+  handles payment events).
 - Two lines with the same item and description cannot share one consolidated invoice unless Selling Settings allows
   adding an item multiple times; set a Service Identifier per subscription.
 

@@ -15,7 +15,7 @@ from frappe.utils.synchronization import filelock
 
 from automated_subscriptions.automated_subscriptions.billing.runner import party_lock_name
 
-LOCK = party_lock_name("_Test Company", "Customer", "_Test Lock Customer")
+LOCK = party_lock_name("Customer", "_Test Lock Customer")
 
 
 def run_in_thread(fn, *args):
@@ -29,8 +29,8 @@ def run_in_thread(fn, *args):
 class TestRunnerLock(IntegrationTestCase):
 	def test_lock_name_is_a_bare_path_component(self):
 		self.assertRegex(LOCK, r"^subbill-[0-9a-f]{16}$")
-		self.assertEqual(LOCK, party_lock_name("_Test Company", "Customer", "_Test Lock Customer"))
-		self.assertNotEqual(LOCK, party_lock_name("_Test Company", "Customer", "_Test Lock Customer / X"))
+		self.assertEqual(LOCK, party_lock_name("Customer", "_Test Lock Customer"))
+		self.assertNotEqual(LOCK, party_lock_name("Customer", "_Test Lock Customer / X"))
 
 	def test_filelock_serialises_two_threads(self):
 		events = []

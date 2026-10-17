@@ -14,15 +14,20 @@ out of scope.
 Core's `cancel_subscription` is deliberately not called: it cuts an arrears invoice for the elapsed part of the
 period and hard-codes the cancellation date to today."""
 
+from datetime import date
+from typing import TYPE_CHECKING, cast
+
 import frappe
 from erpnext.accounts.doctype.sales_invoice.sales_invoice import make_sales_return
 from erpnext.accounts.doctype.subscription.subscription import InvoiceCancelled
 from frappe import _
 from frappe.query_builder.functions import IfNull
-from frappe.utils import add_days, date_diff, flt, formatdate, getdate
+from frappe.utils import add_days, date_diff, flt, formatdate
+from frappe.utils.data import DateTimeLikeObject
 from frappe.utils.file_lock import LockTimeoutError
 from frappe.utils.synchronization import filelock
 
+from automated_subscriptions.automated_subscriptions.billing.dates import as_date
 from automated_subscriptions.automated_subscriptions.billing.exceptions import (
 	ConsolidationLocked,
 	CreditNoteAlreadyIssued,
@@ -31,8 +36,13 @@ from automated_subscriptions.automated_subscriptions.billing.exceptions import (
 from automated_subscriptions.automated_subscriptions.billing.runner import party_lock_name
 from automated_subscriptions.automated_subscriptions.billing.settings import get_settings
 
+if TYPE_CHECKING:
+	from erpnext.accounts.doctype.sales_invoice.sales_invoice import SalesInvoice
 
-def billed_lines(subscription: str) -> list[frappe._dict]:
+	from automated_subscriptions.automated_subscriptions.custom.subscription import AutoSubSubscription
+
+
+def billed_lines(subscription: str | None) -> list[frappe._dict]:
 	"""Submitted, non-return invoice lines billing `subscription`: engine lines (line link) plus legacy
 	header-only lines (header link, no line link). Each carries the line's period, falling back to the
 	invoice header dates."""
@@ -105,7 +115,7 @@ def existing_returns(invoice: str, row_names: list[str]) -> list[frappe._dict]:
 
 
 def _guard_double_refund(invoice: str, rows: list[frappe._dict]) -> None:
-	hits = existing_returns(invoice, [row.row_name for row in rows])
+	hits = existing_returns(invoice, [row["row_name"] for row in rows])
 	submitted = [hit for hit in hits if hit.docstatus == 1]
 	if submitted:
 		frappe.throw(
@@ -114,7 +124,7 @@ def _guard_double_refund(invoice: str, rows: list[frappe._dict]) -> None:
 			),
 			CreditNoteAlreadyIssued,
 		)
-	drafts = sorted({hit.name for hit in hits if hit.docstatus == 0})
+	drafts = sorted({hit["name"] for hit in hits if hit.docstatus == 0})
 	if drafts:
 		frappe.msgprint(
 			_("Draft return(s) {0} against {1} also reference the credited rows.").format(
@@ -124,7 +134,13 @@ def _guard_double_refund(invoice: str, rows: list[frappe._dict]) -> None:
 		)
 
 
-def _build_credit_note(sub, invoice: str, rows: list[frappe._dict], cancel_date, posting_date):
+def _build_credit_note(
+	sub: AutoSubSubscription,
+	invoice: str,
+	rows: list[frappe._dict],
+	cancel_date: date,
+	posting_date: date | None,
+) -> SalesInvoice | None:
 	_guard_double_refund(invoice, rows)
 	by_row = {row.row_name: row for row in rows}
 
@@ -156,11 +172,11 @@ def _build_credit_note(sub, invoice: str, rows: list[frappe._dict], cancel_date,
 		if new_rate <= 0:
 			cn.remove(item)
 			continue
-		credited_from = max(getdate(source.pstart), add_days(cancel_date, 1))
+		credited_from = max(as_date(source.pstart), add_days(cancel_date, 1))
 		item.rate = new_rate
 		item.subscription = sub.name
 		item.subscription_period_start = credited_from
-		item.subscription_period_end = getdate(source.pend)
+		item.subscription_period_end = as_date(source.pend)
 		item.description = "{}<br>{}".format(
 			item.description or item.item_name or item.item_code,
 			_("Credit for unused service {0} - {1} ({2} of {3} days)").format(
@@ -171,11 +187,11 @@ def _build_credit_note(sub, invoice: str, rows: list[frappe._dict], cancel_date,
 		return None
 
 	ref = rows[0]
-	ref_posting = getdate(ref.posting_date)
+	ref_posting = as_date(ref.posting_date)
 	cn.subscription = sub.name
 	cn.set_posting_time = 1
 	cn.posting_date = posting_date or max(cancel_date, ref_posting)
-	cn.posting_time = ref.posting_time if getdate(cn.posting_date) == ref_posting else "00:00:00"
+	cn.posting_time = ref.posting_time if as_date(cn.posting_date) == ref_posting else "00:00:00"
 	cn.update_outstanding_for_self = 1
 	cn.from_date = None
 	cn.to_date = None
@@ -194,8 +210,10 @@ def _build_credit_note(sub, invoice: str, rows: list[frappe._dict], cancel_date,
 	return cn
 
 
-def _issue_credit_notes(sub, cancel_date, posting_date) -> list:
-	lines = [row for row in billed_lines(sub.name) if row.pend and getdate(row.pend) >= cancel_date]
+def _issue_credit_notes(
+	sub: AutoSubSubscription, cancel_date: date, posting_date: date | None
+) -> list[SalesInvoice]:
+	lines = [row for row in billed_lines(sub.name) if row.pend and as_date(row.pend) >= cancel_date]
 	for row in lines:
 		if not row.pstart:
 			frappe.throw(
@@ -209,7 +227,7 @@ def _issue_credit_notes(sub, cancel_date, posting_date) -> list:
 	for row in lines:
 		row.factor, row.unused_days, row.total_days = unused_factor(row.pstart, row.pend, cancel_date)
 		if row.factor > 0:
-			by_invoice.setdefault(row.invoice, []).append(row)
+			by_invoice.setdefault(row["invoice"], []).append(row)
 
 	credit_notes = []
 	for invoice, rows in by_invoice.items():
@@ -224,13 +242,17 @@ def _issue_credit_notes(sub, cancel_date, posting_date) -> list:
 
 
 @frappe.whitelist()
-def cancel_with_credit_note(subscription: str, cancel_date=None, posting_date=None) -> dict:
+def cancel_with_credit_note(
+	subscription: str,
+	cancel_date: DateTimeLikeObject | None = None,
+	posting_date: DateTimeLikeObject | None = None,
+) -> dict:
 	"""Cancel `subscription` effective `cancel_date` (default today) and credit the unused service.
 
 	`posting_date` is only for a cancel date that falls in a frozen or closed period: the credit notes are
 	posted on it while the credited window is still computed from `cancel_date`.
 	Returns {"subscription", "credit_notes": [names], "credited": total credited (positive)}."""
-	sub = frappe.get_doc("Subscription", subscription)
+	sub = cast("AutoSubSubscription", frappe.get_doc("Subscription", subscription))
 	frappe.has_permission("Subscription", "write", doc=sub, throw=True)
 	frappe.has_permission("Sales Invoice", "submit", throw=True)
 
@@ -253,11 +275,12 @@ def cancel_with_credit_note(subscription: str, cancel_date=None, posting_date=No
 			_("Credit Note On Cancellation is disabled in Subscription Settings."), SubscriptionBillingError
 		)
 
-	cancel_date = getdate(cancel_date)
-	posting_date = getdate(posting_date) if posting_date else None
+	cancel_date = as_date(cancel_date)
+	posting_date = as_date(posting_date) if posting_date else None
 
+	# the runner's lock (party-keyed, so a blank company cannot resolve to a different user's default here)
 	try:
-		with filelock(party_lock_name(sub.company, sub.party_type, sub.party), timeout=60):
+		with filelock(party_lock_name(sub.party_type, sub.party), timeout=60):
 			credit_notes = _issue_credit_notes(sub, cancel_date, posting_date)
 			sub.status = "Cancelled"
 			sub.cancelation_date = cancel_date

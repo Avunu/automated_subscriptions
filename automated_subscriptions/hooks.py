@@ -11,7 +11,7 @@ required_apps = ["erpnext", "payments"]
 
 # Fresh installs mark all patches as completed without running them (frappe/installer.py
 # set_all_patches_as_completed); existing sites get this index from the post_model_sync patch.
-after_install = ["automated_subscriptions.patches.v1_1.add_sales_invoice_subscription_index.execute"]
+after_install = ["automated_subscriptions.install.after_install"]
 # Both run after sync_customizations (install: after_sync; migrate: after_migrate), unlike after_install and
 # post_model_sync patches, so the Subscription Settings custom fields exist when the defaults are written.
 after_sync = ["automated_subscriptions.automated_subscriptions.billing.settings.materialise_defaults"]
@@ -27,9 +27,9 @@ doc_events = {
 		"on_cancel": "automated_subscriptions.automated_subscriptions.custom.sales_invoice.refresh_subscriptions_on_cancel",
 	},
 }
+# custom/subscription_settings.py and custom/sales_invoice_item.py only declare custom-field types: not registered
 extend_doctype_class = {
-	"Process Subscription": "automated_subscriptions.automated_subscriptions.custom.process_subscription.ProcessSubscription",
-	"Sales Invoice": "automated_subscriptions.automated_subscriptions.custom.sales_invoice.SalesInvoice",
-	"Subscription": "automated_subscriptions.automated_subscriptions.custom.subscription.Subscription",
-	"Subscription Settings": "automated_subscriptions.automated_subscriptions.custom.subscription_settings.SubscriptionSettings",
+	"Process Subscription": "automated_subscriptions.automated_subscriptions.custom.process_subscription.AutoSubProcessSubscription",
+	"Sales Invoice": "automated_subscriptions.automated_subscriptions.custom.sales_invoice.AutoSubSalesInvoice",
+	"Subscription": "automated_subscriptions.automated_subscriptions.custom.subscription.AutoSubSubscription",
 }
