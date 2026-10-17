@@ -858,6 +858,22 @@ class TestConsolidation(IntegrationTestCase):
 		self.assertEqual(names, [a.name, b.name])
 		self.assert_date(posting_date, self.today)
 
+	def test_process_subscription_limited_to_one_subscription(self):
+		a = self.make_sub(identifier="a")
+		self.make_sub(identifier="b")
+		target = "automated_subscriptions.automated_subscriptions.custom.process_subscription.process_all"
+		with patch(target) as process_all_mock:
+			frappe.get_doc(
+				{
+					"doctype": "Process Subscription",
+					"posting_date": self.today,
+					"customer": CUSTOMER,
+					"subscription": a.name,
+				}
+			).submit()
+			frappe.db.after_commit.run()
+		self.assertEqual(process_all_mock.call_args.args[0], [a.name])
+
 	def test_process_subscription_logs_an_unexpected_failure(self):
 		self.make_sub(identifier="a")
 		title = "Process Subscription (customer) failed"

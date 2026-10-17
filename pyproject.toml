@@ -7,9 +7,7 @@ readme = "README.md"
 license = { text = "MIT" }
 classifiers = ["License :: OSI Approved :: MIT License"]
 dynamic = ["version"]
-dependencies = [
-	# "frappe~=15.0.0" # Installed and managed by bench.
-]
+dependencies = []
 
 [build-system]
 requires = ["flit_core >=3.4,<4"]
@@ -67,7 +65,7 @@ show_missing = true
 skip_covered = true
 precision = 1
 exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError", "@(abc\\.)?abstractmethod"]
-fail_under = 0
+fail_under = 92
 
 [tool.vulture]
 exclude = [".venv/", "node_modules/", ".frappe-nix/", ".dev-dist/"]
