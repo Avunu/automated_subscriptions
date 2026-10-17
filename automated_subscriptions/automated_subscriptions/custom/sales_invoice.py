@@ -7,6 +7,8 @@ subscription invoice on submit.
 
 The mixin is registered via extend_doctype_class; the module functions are doc_events (hooks.py)."""
 
+from datetime import date
+
 import frappe
 from erpnext.accounts.doctype.payment_request.payment_request import make_payment_request
 from erpnext.accounts.doctype.sales_invoice.sales_invoice import SalesInvoice as BaseSalesInvoice
@@ -71,6 +73,15 @@ class SalesInvoice(BaseSalesInvoice):
 	def set_missing_values(self, for_validate=False):
 		apply_subscription_billing_policy(self)
 		return super().set_missing_values(for_validate)
+
+	def set_payment_schedule(self):
+		"""Core Subscription.create_invoice stamps posting_date with a datetime.date (current_invoice_start or end),
+		and set_payment_schedule hands it to the whitelisted get_payment_term_details, whose `posting_date: str |
+		None` frappe's type validation enforces: every subscription invoice whose customer has a Payment Terms
+		Template failed with FrappeTypeError. The ISO string is the same date in the form a desk save sends."""
+		if isinstance(self.posting_date, date):
+			self.posting_date = getdate(self.posting_date).isoformat()
+		return super().set_payment_schedule()
 
 	def refresh_subscription_status(self):
 		"""Fan out over every subscription the invoice bills (header and lines); one bad subscription must not
