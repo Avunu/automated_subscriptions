@@ -7,6 +7,8 @@ Subscriptions are billed through the PR 3 runner so every January line carries i
 customer is anchored (Anniversary, Jan 1) and consolidating, which is what routes the desk button to the
 credit-note path."""
 
+from unittest.mock import patch
+
 import frappe
 from erpnext.accounts.doctype.subscription.subscription import InvoiceCancelled
 from erpnext.accounts.doctype.subscription.test_subscription import (
@@ -18,13 +20,17 @@ from erpnext.accounts.doctype.subscription.test_subscription import (
 )
 from frappe.tests import IntegrationTestCase
 
+from automated_subscriptions.automated_subscriptions.billing import credit_note as credit_note_module
 from automated_subscriptions.automated_subscriptions.billing.credit_note import cancel_with_credit_note
 from automated_subscriptions.automated_subscriptions.billing.dates import as_date
 from automated_subscriptions.automated_subscriptions.billing.exceptions import (
 	CreditNoteAlreadyIssued,
 	SubscriptionBillingError,
 )
-from automated_subscriptions.automated_subscriptions.billing.runner import run_consolidated_billing
+from automated_subscriptions.automated_subscriptions.billing.runner import (
+	party_lock_name,
+	run_consolidated_billing,
+)
 from automated_subscriptions.automated_subscriptions.tests.test_payment_request import (
 	make_gateway_account,
 	set_plan_gateway,
@@ -241,6 +247,29 @@ class TestCreditNote(IntegrationTestCase):
 		sub.reload()
 		self.assertEqual(sub.status, "Cancelled")
 		self.assertEqual(as_date(sub.cancelation_date), as_date("2018-02-05"))
+
+	def test_blank_company_takes_the_runners_lock(self):
+		"""Company is optional on a Subscription; the runner bills a blank one under the default company and
+		locks that party key, so the cancellation must lock the same key to serialise with it."""
+		sub = self.make_sub()
+		frappe.db.set_value("Subscription", sub.name, "company", None)
+		# the save validates the plans' currency against the party's when there is no company
+		frappe.db.set_value("Customer", CUSTOMER, "default_currency", "INR")
+		frappe.clear_document_cache("Customer", CUSTOMER)
+		sub.reload()
+		locks = []
+		real_filelock = credit_note_module.filelock
+
+		def recording_filelock(name, **kwargs):
+			locks.append(name)
+			return real_filelock(name, **kwargs)
+
+		with (
+			patch.object(credit_note_module, "get_default_company", return_value=COMPANY),
+			patch.object(credit_note_module, "filelock", side_effect=recording_filelock),
+		):
+			self.cancel(sub, "2018-01-05")
+		self.assertEqual(locks, [party_lock_name(COMPANY, "Customer", CUSTOMER)])
 
 	# ---- 5
 	def test_future_prepaid_line(self):

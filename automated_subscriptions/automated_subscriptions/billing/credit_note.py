@@ -18,6 +18,7 @@ from datetime import date
 from typing import TYPE_CHECKING, cast
 
 import frappe
+from erpnext import get_default_company
 from erpnext.accounts.doctype.sales_invoice.sales_invoice import make_sales_return
 from erpnext.accounts.doctype.subscription.subscription import InvoiceCancelled
 from frappe import _
@@ -278,8 +279,10 @@ def cancel_with_credit_note(
 	cancel_date = as_date(cancel_date)
 	posting_date = as_date(posting_date) if posting_date else None
 
+	# the runner's lock: a blank company bills under the default company (runner.group_key)
+	company = sub.company or get_default_company()
 	try:
-		with filelock(party_lock_name(sub.company, sub.party_type, sub.party), timeout=60):
+		with filelock(party_lock_name(company, sub.party_type, sub.party), timeout=60):
 			credit_notes = _issue_credit_notes(sub, cancel_date, posting_date)
 			sub.status = "Cancelled"
 			sub.cancelation_date = cancel_date
