@@ -33,6 +33,7 @@ from automated_subscriptions.automated_subscriptions.custom.subscription import 
 )
 from automated_subscriptions.automated_subscriptions.tests.utils import (
 	frozen_today,
+	full_rollbacks_suppressed,
 	make_anchored_customer,
 )
 
@@ -69,18 +70,6 @@ def invoices_for(customer):
 def error_log_count(title):
 	# tabError Log is MyISAM: rows survive the test rollback, so count by title before and after
 	return frappe.db.count("Error Log", {"method": title})
-
-
-def rollback_savepoints_only(original):
-	"""process_all does a full frappe.db.rollback() on a ValidationError, which would wipe the test
-	transaction (core stubs it the same way, test_subscription.py); the runner's savepoint rollback must
-	still work."""
-
-	def rollback(*args, **kwargs):
-		if kwargs.get("save_point"):
-			return original(*args, **kwargs)
-
-	return rollback
 
 
 class TestConsolidation(IntegrationTestCase):
@@ -276,12 +265,8 @@ class TestConsolidation(IntegrationTestCase):
 
 		# (c) core's daily fan-out on the same day
 		before = error_log_count(GROUP_FAILURE_TITLE)
-		original_rollback = frappe.db.rollback
-		frappe.db.rollback = rollback_savepoints_only(original_rollback)
-		try:
+		with full_rollbacks_suppressed():
 			process_all([a.name, b.name, c.name], self.today)
-		finally:
-			frappe.db.rollback = original_rollback
 		self.assertEqual(len(invoices_for(CUSTOMER)), 1)
 		self.assertEqual(error_log_count(GROUP_FAILURE_TITLE), before)
 		for sub in (a, b, c):
@@ -381,13 +366,8 @@ class TestConsolidation(IntegrationTestCase):
 		a, b, a2, b2 = self._grace_scenario()
 
 		frappe.local.consolidated_billing = None
-		original_rollback = frappe.db.rollback
-		frappe.db.rollback = rollback_savepoints_only(original_rollback)
-		try:
-			with frozen_today(today):
-				process_all([a.name, b.name], today)  # scheduler path: sub[0] delegates, sub[1] hits the memo
-		finally:
-			frappe.db.rollback = original_rollback
+		with full_rollbacks_suppressed(), frozen_today(today):
+			process_all([a.name, b.name], today)  # scheduler path: sub[0] delegates, sub[1] hits the memo
 		for sub in (a, b):
 			sub.reload()
 			self.assertNotEqual(sub.status, "Cancelled")
@@ -571,13 +551,11 @@ class TestConsolidation(IntegrationTestCase):
 		before = error_log_count(GROUP_FAILURE_TITLE)
 		before_sub = error_log_count("Subscription failed")
 
-		original_rollback = frappe.db.rollback
-		frappe.db.rollback = rollback_savepoints_only(original_rollback)
-		try:
-			with patch.object(MixinSubscription, "_absorb_into", side_effect=IndexError("boom")):
-				process_all([a.name, b.name, x.name], self.today)
-		finally:
-			frappe.db.rollback = original_rollback
+		with (
+			full_rollbacks_suppressed(),
+			patch.object(MixinSubscription, "_absorb_into", side_effect=IndexError("boom")),
+		):
+			process_all([a.name, b.name, x.name], self.today)
 
 		self.assertEqual(invoices_for(CUSTOMER), [])  # the group rolled back (sink draft included)
 		self.assertEqual(len(invoices_for(CUSTOMER_2)), 1)  # the next party still billed
@@ -676,13 +654,11 @@ class TestConsolidation(IntegrationTestCase):
 		a2 = self.make_sub(identifier="a2")
 		b = self.make_sub(identifier="b", fields={"sales_tax_template": TAX_TEMPLATE})
 		before = error_log_count(GROUP_FAILURE_TITLE)
-		original_rollback = frappe.db.rollback
-		frappe.db.rollback = rollback_savepoints_only(original_rollback)
-		try:
-			with patch.object(MixinSubscription, "_absorb_into", side_effect=IndexError("boom")):
-				process_all([a.name, a2.name, b.name], self.today)
-		finally:
-			frappe.db.rollback = original_rollback
+		with (
+			full_rollbacks_suppressed(),
+			patch.object(MixinSubscription, "_absorb_into", side_effect=IndexError("boom")),
+		):
+			process_all([a.name, a2.name, b.name], self.today)
 
 		self.assertEqual(error_log_count(GROUP_FAILURE_TITLE), before + 1)
 		self.assertEqual(
@@ -711,13 +687,11 @@ class TestConsolidation(IntegrationTestCase):
 				raise IndexError("boom")
 			return original_finalize(run, skipped)
 
-		original_rollback = frappe.db.rollback
-		frappe.db.rollback = rollback_savepoints_only(original_rollback)
-		try:
-			with patch.object(runner_module, "_finalize", side_effect=finalize_fails_for_a):
-				process_all([a.name, b.name], self.today)
-		finally:
-			frappe.db.rollback = original_rollback
+		with (
+			full_rollbacks_suppressed(),
+			patch.object(runner_module, "_finalize", side_effect=finalize_fails_for_a),
+		):
+			process_all([a.name, b.name], self.today)
 
 		invoices = invoices_for(CUSTOMER)
 		self.assertEqual(len(invoices), 1)  # B consolidated; A must NOT have been billed standalone
@@ -742,13 +716,11 @@ class TestConsolidation(IntegrationTestCase):
 		b = self.make_sub(identifier="b", days_until_due=15)
 		c = self.make_sub(identifier="c", days_until_due=5)
 		before_sub = error_log_count("Subscription failed")
-		original_rollback = frappe.db.rollback
-		frappe.db.rollback = rollback_savepoints_only(original_rollback)
-		try:
-			with patch.object(MixinSubscription, "_absorb_into", side_effect=IndexError("boom")):
-				process_all([a.name, b.name, c.name], self.today)
-		finally:
-			frappe.db.rollback = original_rollback
+		with (
+			full_rollbacks_suppressed(),
+			patch.object(MixinSubscription, "_absorb_into", side_effect=IndexError("boom")),
+		):
+			process_all([a.name, b.name, c.name], self.today)
 
 		invoice = self.single_invoice()
 		self.assertEqual([d.subscription for d in invoice.items], [c.name])  # the {C} group succeeded
@@ -784,13 +756,8 @@ class TestConsolidation(IntegrationTestCase):
 		frappe.clear_document_cache("Customer", customer)
 		sub = frappe.get_doc("Subscription", sub.name)
 		# between the stale trigger (11-01, inside core's one-cycle cap) and the aligned one (12-31)
-		original_rollback = frappe.db.rollback
-		frappe.db.rollback = rollback_savepoints_only(original_rollback)
-		try:
-			with frozen_today("2026-11-01"):
-				process_all([sub.name], "2026-11-01")  # delegates; the runner skips it as not due
-		finally:
-			frappe.db.rollback = original_rollback
+		with full_rollbacks_suppressed(), frozen_today("2026-11-01"):
+			process_all([sub.name], "2026-11-01")  # delegates; the runner skips it as not due
 		self.assertEqual(invoices_for(customer), [])  # no early standalone invoice
 		sub.reload()
 		self.assert_date(sub.current_invoice_start, "2026-10-02")
@@ -853,12 +820,8 @@ class TestConsolidation(IntegrationTestCase):
 			self.assertFalse(frappe.db.get_value("Subscription", blank.name, "company"))
 			self.assertIn(blank.name, _candidate_subscriptions(CUSTOMER, "Customer", COMPANY))
 
-			original_rollback = frappe.db.rollback
-			frappe.db.rollback = rollback_savepoints_only(original_rollback)
-			try:
+			with full_rollbacks_suppressed():
 				process_all([blank.name, sibling.name], self.today)
-			finally:
-				frappe.db.rollback = original_rollback
 
 			invoice = self.single_invoice()
 			self.assertEqual(invoice.company, COMPANY)
@@ -904,17 +867,13 @@ class TestConsolidation(IntegrationTestCase):
 			):  # the post-release commit (the first is the fresh-snapshot one after the lock)
 				raise RuntimeError("redis down")
 
-		original_rollback = frappe.db.rollback
-		frappe.db.rollback = rollback_savepoints_only(original_rollback)
-		try:
-			with (
-				patch.object(frappe, "in_test", False),
-				patch.object(frappe.db, "commit", side_effect=commit),
-				patch("frappe.enqueue"),
-			):
-				results = run_consolidated_billing(self.today, party=CUSTOMER)
-		finally:
-			frappe.db.rollback = original_rollback
+		with (
+			full_rollbacks_suppressed(),
+			patch.object(frappe, "in_test", False),
+			patch.object(frappe.db, "commit", side_effect=commit),
+			patch("frappe.enqueue"),
+		):
+			results = run_consolidated_billing(self.today, party=CUSTOMER)
 
 		self.assertEqual(len(results), 1)
 		self.assertIsNone(results[0]["invoice"])
@@ -935,7 +894,7 @@ class TestConsolidation(IntegrationTestCase):
 		before_sub = error_log_count("Subscription failed")
 		with (
 			frozen_today(today),
-			patch.object(frappe.db, "rollback", rollback_savepoints_only(frappe.db.rollback)),
+			full_rollbacks_suppressed(),
 		):
 			process_all([a.name, b.name], today)
 		invoices = invoices_for(CUSTOMER)
@@ -952,7 +911,7 @@ class TestConsolidation(IntegrationTestCase):
 		frappe.local.consolidated_billing = None
 		with (
 			frozen_today(today),
-			patch.object(frappe.db, "rollback", rollback_savepoints_only(frappe.db.rollback)),
+			full_rollbacks_suppressed(),
 		):
 			process_all([a.name, b.name], today)
 		invoices = invoices_for(CUSTOMER)
@@ -1167,7 +1126,7 @@ class TestConsolidation(IntegrationTestCase):
 		frappe.db.set_value("Customer", CUSTOMER, "subscription_billing_anchor_mode", "Calendar")
 		frappe.clear_document_cache("Customer", CUSTOMER)
 		before_sub = error_log_count("Subscription failed")
-		with patch.object(frappe.db, "rollback", rollback_savepoints_only(frappe.db.rollback)):
+		with full_rollbacks_suppressed():
 			process_all([x2.name, y2.name], self.today)
 		invoices = invoices_for(CUSTOMER)
 		self.assertEqual(len(invoices), 2)
@@ -1189,7 +1148,7 @@ class TestConsolidation(IntegrationTestCase):
 	def _submit_process_subscription(self, customer=CUSTOMER, posting_date=None):
 		with (
 			patch("frappe.enqueue"),
-			patch.object(frappe.db, "rollback", rollback_savepoints_only(frappe.db.rollback)),
+			full_rollbacks_suppressed(),
 		):
 			frappe.get_doc(
 				{
@@ -1244,7 +1203,7 @@ class TestConsolidation(IntegrationTestCase):
 			patch.object(
 				runner_module, "_candidate_subscriptions", wraps=runner_module._candidate_subscriptions
 			) as scan,
-			patch.object(frappe.db, "rollback", rollback_savepoints_only(frappe.db.rollback)),
+			full_rollbacks_suppressed(),
 		):
 			process_all([s.name for s in subs], self.today)
 		self.assertEqual(scan.call_count, 1)

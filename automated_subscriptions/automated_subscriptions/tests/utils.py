@@ -57,3 +57,22 @@ def make_payment_terms_template(name, credit_days):
 	)
 	doc.insert(ignore_permissions=True)
 	return doc.name
+
+
+@contextmanager
+def full_rollbacks_suppressed():
+	"""Keep the test's transaction through code that answers an error with a full frappe.db.rollback().
+
+	IntegrationTestCase runs each test inside one transaction that it rolls back afterwards. Core's process_all
+	(and the engine's own error paths) roll back everything on a failure, which would also discard the test's
+	fixtures, so the full rollback is skipped here while savepoint rollbacks, the runner's per-group isolation,
+	still reach the database. Core's own subscription tests stub the method for the same reason. Yields the mock,
+	so a test can assert that a full rollback was asked for."""
+	rollback = frappe.db.rollback
+
+	def savepoints_only(*, save_point=None, chain=False):
+		if save_point:
+			rollback(save_point=save_point, chain=chain)
+
+	with patch.object(frappe.db, "rollback", side_effect=savepoints_only) as mock:
+		yield mock
