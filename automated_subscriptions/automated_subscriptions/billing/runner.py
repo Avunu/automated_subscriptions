@@ -235,6 +235,9 @@ def _log_group_failure(key, exc) -> None:
 		)
 
 
+# ---- finalisation and summary ------------------------------------------------------------------------------
+
+
 def _date_str(value) -> str | None:
 	return str(getdate(value)) if value else None
 
@@ -293,9 +296,6 @@ def _summarise(sink, run, skipped) -> dict:
 	else:
 		summary["docstatus"] = sink.docstatus
 	return summary
-
-
-# ---- finalisation and summary ------------------------------------------------------------------------------
 
 
 def _finalize(run, skipped) -> dict:
