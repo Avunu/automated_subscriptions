@@ -14,7 +14,10 @@ from automated_subscriptions.automated_subscriptions.billing.settings import (
 	get_settings,
 	materialise_defaults,
 )
-from automated_subscriptions.automated_subscriptions.tests.utils import make_anchored_customer
+from automated_subscriptions.automated_subscriptions.tests.utils import (
+	get_subscription,
+	make_anchored_customer,
+)
 
 OUR_SETTINGS_FIELDS = (
 	"annual_discount_percentage",
@@ -295,7 +298,7 @@ class TestFields(IntegrationTestCase):
 		finally:
 			frappe.flags.in_import = False
 
-		sub = frappe.get_doc("Subscription", created.name)
+		sub = get_subscription(created.name)
 		self.assertEqual(type(sub).__name__, "ExtendedSubscription")
 		self.assertTrue(hasattr(sub, "_billing_profile"))
 		self.assertIsNone(sub._billing_profile())

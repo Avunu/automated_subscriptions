@@ -5,24 +5,34 @@
 
 import datetime
 from contextlib import contextmanager
+from typing import TYPE_CHECKING, cast
 from unittest.mock import patch
 
 import frappe
-from frappe.utils import getdate
+
+from automated_subscriptions.automated_subscriptions.billing.dates import as_date
+
+if TYPE_CHECKING:
+	from automated_subscriptions.automated_subscriptions.custom.sales_invoice import AutoSubSalesInvoice
+	from automated_subscriptions.automated_subscriptions.custom.subscription import AutoSubSubscription
 
 
 def make_anchored_customer(name, mode, anchor_date=None, interval=None, consolidate=0):
 	if frappe.db.exists("Customer", name):
 		return frappe.get_doc("Customer", name)
-	customer = frappe.new_doc("Customer")
-	customer.customer_name = name
-	customer.customer_type = "Company"
-	customer.customer_group = "_Test Customer Group"
-	customer.territory = "_Test Territory"
-	customer.subscription_billing_anchor_mode = mode
-	customer.subscription_billing_anchor_date = anchor_date
-	customer.subscription_billing_interval = interval
-	customer.consolidate_subscription_invoices = consolidate
+	customer = frappe.get_doc(
+		{
+			"doctype": "Customer",
+			"customer_name": name,
+			"customer_type": "Company",
+			"customer_group": "_Test Customer Group",
+			"territory": "_Test Territory",
+			"subscription_billing_anchor_mode": mode,
+			"subscription_billing_anchor_date": anchor_date,
+			"subscription_billing_interval": interval,
+			"consolidate_subscription_invoices": consolidate,
+		}
+	)
 	customer.append("accounts", {"company": "_Test Company", "account": "_Test Receivable - _TC"})
 	customer.insert(ignore_permissions=True)
 	return customer
@@ -36,7 +46,7 @@ def frozen_today(date_str):
 	The frozen instant carries non-zero microseconds: Document.check_if_latest compares cstr(db modified)
 	("... 10:00:00" for a whole second) with the string now() wrote ("... 10:00:00.000000"), and a save
 	followed by submit() under the freeze would raise TimestampMismatchError otherwise."""
-	frozen = datetime.datetime.combine(getdate(date_str), datetime.time(10, 0, 0, 123456))
+	frozen = datetime.datetime.combine(as_date(date_str), datetime.time(10, 0, 0, 123456))
 	with patch("frappe.utils.data.now_datetime", return_value=frozen):
 		yield frozen
 
@@ -45,8 +55,7 @@ def make_payment_terms_template(name, credit_days):
 	"""One-row template, 100 % due `credit_days` after the invoice date."""
 	if frappe.db.exists("Payment Terms Template", name):
 		return name
-	doc = frappe.new_doc("Payment Terms Template")
-	doc.template_name = name
+	doc = frappe.get_doc({"doctype": "Payment Terms Template", "template_name": name})
 	doc.append(
 		"terms",
 		{
@@ -76,3 +85,15 @@ def full_rollbacks_suppressed():
 
 	with patch.object(frappe.db, "rollback", side_effect=savepoints_only) as mock:
 		yield mock
+
+
+def get_invoice(name: str | None) -> AutoSubSalesInvoice:
+	"""frappe.get_doc for a Sales Invoice, typed as the composed controller the tests exercise."""
+	assert name, "an unsaved Sales Invoice has no name"
+	return cast("AutoSubSalesInvoice", frappe.get_doc("Sales Invoice", name))
+
+
+def get_subscription(name: str | None) -> AutoSubSubscription:
+	"""frappe.get_doc for a Subscription, typed as the composed controller the tests exercise."""
+	assert name, "an unsaved Subscription has no name"
+	return cast("AutoSubSubscription", frappe.get_doc("Subscription", name))

@@ -22,9 +22,14 @@ from erpnext.accounts.doctype.subscription.test_subscription import (
 	reset_settings,
 )
 from frappe.tests import IntegrationTestCase
-from frappe.utils import add_months, add_to_date, getdate, nowdate
+from frappe.utils import add_months, add_to_date, nowdate
 
-from automated_subscriptions.automated_subscriptions.tests.utils import frozen_today
+from automated_subscriptions.automated_subscriptions.billing.dates import as_date
+from automated_subscriptions.automated_subscriptions.tests.utils import (
+	frozen_today,
+	get_invoice,
+	get_subscription,
+)
 
 CUSTOMER = "_Test Customer"
 COMPANY = "_Test Company"
@@ -81,7 +86,7 @@ class TestLookups(IntegrationTestCase):
 			sub.insert()
 		finally:
 			frappe.flags.in_import = False
-		return frappe.get_doc("Subscription", sub.name)
+		return get_subscription(sub.name)
 
 	def line_for(self, sub, plan, rate):
 		return {
@@ -98,10 +103,10 @@ class TestLookups(IntegrationTestCase):
 		"""A's own draft (created by after_insert) plus B's line, header period widened to cover both."""
 		names = invoices_of(a.name)
 		self.assertEqual(len(names), 1, names)
-		invoice = frappe.get_doc("Sales Invoice", names[0])
+		invoice = get_invoice(names[0])
 		self.assertEqual(invoice.docstatus, 0)
 		invoice.append("items", self.line_for(b, plan_b, rate_b))
-		invoice.to_date = max(getdate(invoice.to_date), getdate(b.current_invoice_end))
+		invoice.to_date = max(as_date(invoice.to_date), as_date(b.current_invoice_end))
 		invoice.save()
 		if submit:
 			invoice.submit()
@@ -114,7 +119,7 @@ class TestLookups(IntegrationTestCase):
 		b = self.make_sub(QUARTER_PLAN)
 		invoice = self.consolidate(a, b, QUARTER_PLAN, 20000)
 		self.assertEqual([d.subscription for d in invoice.items], [a.name, b.name])
-		self.assertEqual(getdate(invoice.due_date), getdate(invoice.posting_date))
+		self.assertEqual(as_date(invoice.due_date), as_date(invoice.posting_date))
 		return a, b, invoice
 
 	def statuses(self, *subs):
@@ -123,9 +128,9 @@ class TestLookups(IntegrationTestCase):
 	# ---- 1
 	def test_payment_driven_status_on_consolidated_invoice(self):
 		a, b, invoice = self.consolidated_pair()
-		self.assertEqual(type(frappe.get_doc("Sales Invoice", invoice.name)).__name__, "ExtendedSalesInvoice")
+		self.assertEqual(type(get_invoice(invoice.name)).__name__, "ExtendedSalesInvoice")
 
-		frappe.get_doc("Sales Invoice", invoice.name).refresh_subscription_status()
+		get_invoice(invoice.name).refresh_subscription_status()
 		self.assertEqual(self.statuses(a, b), ["Unpaid", "Unpaid"])
 
 		payment = get_payment_entry("Sales Invoice", invoice.name, bank_account="_Test Bank - _TC")
@@ -168,7 +173,7 @@ class TestLookups(IntegrationTestCase):
 		self.assertEqual(frappe.db.count("Payment Request", {"reference_name": credit_note.name}), 0)
 		# control: core counts the return itself (header link copied, status Return != Paid)
 		self.assertEqual(BaseSubscription.has_outstanding_invoice(a), 1)
-		self.assertIn(credit_note.name, [d.name for d in BaseSubscription.invoices.fget(a)])
+		self.assertIn(credit_note.name, [d["name"] for d in BaseSubscription.invoices.fget(a)])
 		# the line-linked member sees the same
 		self.assertEqual(b.has_outstanding_invoice(), 0)
 		self.assertEqual(b.get_current_invoice().name, invoice.name)
@@ -196,22 +201,22 @@ class TestLookups(IntegrationTestCase):
 			)
 			y = self.make_sub(YEAR_PLAN, "2026-01-01")
 			january = self.consolidate(m, y, YEAR_PLAN, 12000)
-		self.assertEqual(getdate(january.to_date), getdate("2026-12-31"))
-		self.assertEqual(getdate(january.from_date), getdate("2026-01-01"))
-		self.assertEqual(getdate(m.current_invoice_start), getdate("2026-02-01"))
+		self.assertEqual(as_date(january.to_date), as_date("2026-12-31"))
+		self.assertEqual(as_date(january.from_date), as_date("2026-01-01"))
+		self.assertEqual(as_date(m.current_invoice_start), as_date("2026-02-01"))
 
 		with frozen_today("2026-02-01"):
 			m.process(posting_date="2026-02-01")
 		names = invoices_of(m.name)
 		self.assertEqual(len(names), 2)
-		february = frappe.get_doc("Sales Invoice", next(n for n in names if n != january.name))
+		february = get_invoice(next(n for n in names if n != january.name))
 		line = february.items[0]
 		self.assertEqual(line.subscription, m.name)
 		self.assertEqual(
-			(getdate(line.subscription_period_start), getdate(line.subscription_period_end)),
-			(getdate("2026-02-01"), getdate("2026-02-28")),
+			(as_date(line.subscription_period_start), as_date(line.subscription_period_end)),
+			(as_date("2026-02-01"), as_date("2026-02-28")),
 		)
-		self.assertLess(getdate(february.to_date), getdate(january.to_date))  # core would rank January first
+		self.assertLess(as_date(february.to_date), as_date(january.to_date))  # core would rank January first
 
 		m.reload()
 		self.assertEqual(m.get_current_invoice().name, february.name)
@@ -226,8 +231,11 @@ class TestLookups(IntegrationTestCase):
 		# control: without line links the header to_date decides, i.e. core's ordering
 		for row in frappe.get_all("Sales Invoice Item", {"subscription": m.name}, pluck="name"):
 			frappe.db.set_value("Sales Invoice Item", row, "subscription", None)
-		self.assertEqual(m.get_current_invoice().name, january.name)
-		self.assertEqual(BaseSubscription.get_current_invoice(m).name, january.name)
+		current = m.get_current_invoice()
+		core_current = BaseSubscription.get_current_invoice(m)
+		assert current is not None and core_current is not None
+		self.assertEqual(current.name, january.name)
+		self.assertEqual(core_current.name, january.name)
 
 	# ---- 5
 	def test_stock_parity_and_supplier_passthrough(self):
@@ -314,10 +322,10 @@ class TestLookups(IntegrationTestCase):
 	# ---- 6
 	def test_is_current_invoice_generated_legacy_fallback(self):
 		sub = self.make_sub(MONTH_PLAN, in_import=False)
-		invoice = frappe.get_doc("Sales Invoice", invoices_of(sub.name)[0])
-		billed = (getdate(self.today), getdate(add_to_date(self.today, months=1, days=-1)))
-		following = (getdate(sub.current_invoice_start), getdate(sub.current_invoice_end))
-		self.assertEqual(getdate(invoice.posting_date), billed[0])
+		invoice = get_invoice(invoices_of(sub.name)[0])
+		billed = (as_date(self.today), as_date(add_to_date(self.today, months=1, days=-1)))
+		following = (as_date(sub.current_invoice_start), as_date(sub.current_invoice_end))
+		self.assertEqual(as_date(invoice.posting_date), billed[0])
 
 		# legacy lines (no period): core's posting-date rule
 		for row in invoice.items:
@@ -349,7 +357,7 @@ class TestLookups(IntegrationTestCase):
 	# ---- 7
 	def test_on_cancel_refreshes_all_subscriptions(self):
 		a, b, invoice = self.consolidated_pair()
-		frappe.get_doc("Sales Invoice", invoice.name).refresh_subscription_status()
+		get_invoice(invoice.name).refresh_subscription_status()
 		self.assertEqual(self.statuses(a, b), ["Unpaid", "Unpaid"])
 		modified = [frappe.db.get_value("Subscription", s.name, "modified") for s in (a, b)]
 

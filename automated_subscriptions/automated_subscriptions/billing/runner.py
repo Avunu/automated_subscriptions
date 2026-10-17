@@ -33,21 +33,29 @@ customer path clears it per submitted document; a script that calls `process_all
 
 import contextlib
 import hashlib
+from dataclasses import dataclass, field
 from datetime import date
+from typing import TYPE_CHECKING, cast
 
 import frappe
 from erpnext import get_default_company
 from erpnext.accounts.doctype.accounting_dimension.accounting_dimension import get_accounting_dimensions
 from frappe import _
 from frappe.query_builder.functions import IfNull
-from frappe.utils import cint, flt, getdate, sbool
+from frappe.utils import cint, flt, sbool
+from frappe.utils.data import DateTimeLikeObject
 from frappe.utils.file_lock import LockTimeoutError
 from frappe.utils.synchronization import filelock
 
+from automated_subscriptions.automated_subscriptions.billing.dates import as_date
 from automated_subscriptions.automated_subscriptions.billing.exceptions import (
 	ConsolidatedBillingError,
 	ConsolidationLocked,
 )
+
+if TYPE_CHECKING:
+	from automated_subscriptions.automated_subscriptions.custom.sales_invoice import AutoSubSalesInvoice
+	from automated_subscriptions.automated_subscriptions.custom.subscription import AutoSubSubscription
 
 GroupKey = tuple
 # (company, party_type, party, effective_posting_date: date, currency, sales_tax_template, cost_center,
@@ -60,27 +68,56 @@ GroupKey = tuple
 
 # ---- run context (memo + active group) — on frappe.local, never frappe.flags -------------------------------
 
+MemoKey = tuple[str, str, str, str]  # (company, party_type, party, "YYYY-MM-DD")
 
-def _run_ctx() -> frappe._dict:
-	"""The request/job-scoped run context, created on first use.
 
-	`active`: None | _dict(key, posting_date, sink, members, dry_run) while a group is being billed.
-	`done`:   {(company, party_type, party, "YYYY-MM-DD"): "ok" | "failed"}; never written by dry runs.
-	"failed" is sticky for the rest of the run (see _mark_done). Lives on frappe.local (IntegrationTestCase
+@dataclass
+class RunMember:
+	"""One subscription whose lines are on the group's sink."""
+
+	name: str | None
+	period: tuple[date, date]
+	submit_invoice: int
+	service_identifier: str | None
+
+
+@dataclass
+class ActiveRun:
+	"""The group being billed: its key, the sink (a saved draft Sales Invoice once sub[0] created it) and its
+	members in billing order."""
+
+	key: GroupKey
+	posting_date: date
+	dry_run: bool
+	sink: AutoSubSalesInvoice | None = None
+	members: list[RunMember] = field(default_factory=list)
+
+
+@dataclass
+class RunContext:
+	"""`active` while a group is being billed. `done`: {memo key: "ok" | "failed"}, never written by dry runs;
+	"failed" is sticky for the rest of the run (see _mark_done)."""
+
+	active: ActiveRun | None = None
+	done: dict[MemoKey, str] = field(default_factory=dict)
+
+
+def _run_ctx() -> RunContext:
+	"""The request/job-scoped run context, created on first use. Lives on frappe.local (IntegrationTestCase
 	deep-copies frappe.local.flags per class, which would copy a Document held there)."""
 	ctx = getattr(frappe.local, "consolidated_billing", None)
 	if ctx is None:
-		ctx = frappe.local.consolidated_billing = frappe._dict(active=None, done={})
+		ctx = frappe.local.consolidated_billing = RunContext()
 	return ctx
 
 
-def _active_run() -> frappe._dict | None:
+def _active_run() -> ActiveRun | None:
 	"""The group being billed right now, without creating the context (stock subs never touch frappe.local)."""
-	ctx = getattr(frappe.local, "consolidated_billing", None)
+	ctx: RunContext | None = getattr(frappe.local, "consolidated_billing", None)
 	return ctx.active if ctx is not None else None
 
 
-def _mark_done(ctx, memo_key, state: str) -> None:
+def _mark_done(ctx: RunContext, memo_key: MemoKey, state: str) -> None:
 	"""The memo is per party (the delegating process() can only compute the party key) while groups are finer
 	(tax template, days_until_due, effective posting date...): once any group of a party failed the party stays
 	"failed" for the run, so the delegating process() of the failed group's members raises instead of billing
@@ -94,23 +131,23 @@ def _mark_done(ctx, memo_key, state: str) -> None:
 # ---- lock name and group key -------------------------------------------------------------------------------
 
 
-def party_lock_name(company: str, party_type: str, party: str) -> str:
+def party_lock_name(company: str | None, party_type: str | None, party: str | None) -> str:
 	"""Site-scoped lock name; party names contain spaces, apostrophes, possibly "/" — never use them raw."""
 	digest = hashlib.sha1(f"{company}|{party_type}|{party}".encode(), usedforsecurity=False).hexdigest()[:16]
 	return f"subbill-{digest}"
 
 
-def effective_posting_date(sub, run_posting_date) -> date:
+def effective_posting_date(sub: AutoSubSubscription, run_posting_date: DateTimeLikeObject | None) -> date:
 	"""The posting date core will stamp on this sub's invoice (core create_invoice)."""
 	sub._realign_current_period()  # current_invoice_end must be the aligned value (PR 2 R7)
 	if sub.generate_invoice_at == "Beginning of the current subscription period":
-		return getdate(sub.current_invoice_start)
+		return as_date(sub.current_invoice_start)
 	if sub.generate_invoice_at == "Days before the current subscription period":
-		return getdate(run_posting_date or sub.current_invoice_start)
-	return getdate(sub.current_invoice_end)
+		return as_date(run_posting_date or sub.current_invoice_start)
+	return as_date(sub.current_invoice_end)
 
 
-def group_key(sub, run_posting_date) -> GroupKey:
+def group_key(sub: AutoSubSubscription, run_posting_date: DateTimeLikeObject | None) -> GroupKey:
 	"""Everything core copies from sub[0] onto the invoice header must be equal across the group.
 
 	The fixed additional_discount_amount is the one header value equality does not settle: _absorb_into sums
@@ -172,7 +209,7 @@ def _candidate_subscriptions(party, party_type, company) -> list[str]:
 	return query.run(pluck="name")
 
 
-def _is_due(sub, run_posting_date) -> bool:
+def _is_due(sub: AutoSubSubscription, run_posting_date: DateTimeLikeObject | None) -> bool:
 	"""Exactly core process()'s generation predicate; never re-implemented."""
 	return not sub.is_current_invoice_generated(
 		sub.current_invoice_start, sub.current_invoice_end
@@ -189,7 +226,9 @@ def _log_scan_failure(name, exc) -> None:
 		)
 
 
-def _group_due(names, run_posting_date) -> tuple[list[tuple[GroupKey, list[str]]], list[dict]]:
+def _group_due(
+	names: list[str], run_posting_date: date
+) -> tuple[list[tuple[GroupKey, list[str]]], list[dict]]:
 	"""Bucket the due candidates by group key; a candidate that cannot even be evaluated (legacy Week/Day or
 	non-divisor plan under an anchored customer, an Anniversary customer whose date was blanked by a db write)
 	is logged and skipped so the remaining candidates and parties are still grouped and billed. Skipping is
@@ -199,7 +238,7 @@ def _group_due(names, run_posting_date) -> tuple[list[tuple[GroupKey, list[str]]
 	errors: list[dict] = []
 	for name in names:
 		try:
-			sub = frappe.get_doc("Subscription", name)
+			sub = cast("AutoSubSubscription", frappe.get_doc("Subscription", name))
 			sub._realign_current_period()  # before the trigger / cap evaluation, like the mixin's process()
 			if not _is_due(sub, run_posting_date):
 				continue
@@ -220,7 +259,7 @@ def _group_due(names, run_posting_date) -> tuple[list[tuple[GroupKey, list[str]]
 				}
 			)
 			continue
-		groups.setdefault(key, []).append(sub.name)
+		groups.setdefault(key, []).append(name)
 	# ordered by (party, effective_posting_date); the stable sort keeps creation order inside a group
 	return sorted(groups.items(), key=lambda item: (item[0][2], item[0][3])), errors
 
@@ -239,10 +278,10 @@ def _log_group_failure(key, exc) -> None:
 
 
 def _date_str(value) -> str | None:
-	return str(getdate(value)) if value else None
+	return str(as_date(value)) if value else None
 
 
-def _summarise(sink, run, skipped) -> dict:
+def _summarise(sink: AutoSubSalesInvoice, run: ActiveRun, skipped: list[tuple[str | None, str]]) -> dict:
 	members = {m.name: m for m in run.members}
 	lines = []
 	for d in sink.items:
@@ -298,8 +337,7 @@ def _summarise(sink, run, skipped) -> dict:
 	return summary
 
 
-def _finalize(run, skipped) -> dict:
-	sink = run.sink
+def _finalize(run: ActiveRun, sink: AutoSubSalesInvoice, skipped: list[tuple[str | None, str]]) -> dict:
 	sink.from_date = min(
 		m.period[0] for m in run.members
 	)  # from the absorbed periods, never line service dates
@@ -313,7 +351,9 @@ def _finalize(run, skipped) -> dict:
 # ---- one party group, inside lock + savepoint --------------------------------------------------------------
 
 
-def _run_group(key, sub_names, run_posting_date, *, dry_run, lock_timeout):
+def _run_group(
+	key: GroupKey, sub_names: list[str], run_posting_date: date, *, dry_run: bool, lock_timeout: float
+) -> dict | None:
 	company, party_type, party = key[0], key[1], key[2]
 	memo_key = (company, party_type, party, str(run_posting_date))
 	ctx = _run_ctx()
@@ -324,12 +364,13 @@ def _run_group(key, sub_names, run_posting_date, *, dry_run, lock_timeout):
 			sp = "subbill_" + frappe.generate_hash(length=8)  # bare identifier; never derived from the party
 			frappe.db.savepoint(sp)
 			sp_open = True  # False once released: rollback-to-savepoint would then raise 1305
-			ctx.active = frappe._dict(
-				key=key, posting_date=run_posting_date, sink=None, members=[], dry_run=dry_run
-			)
+			run = ctx.active = ActiveRun(key=key, posting_date=run_posting_date, dry_run=dry_run)
 			try:
 				# latest committed rows, row-locked until the group commits
-				subs = [frappe.get_doc("Subscription", name, for_update=True) for name in sub_names]
+				subs = [
+					cast("AutoSubSubscription", frappe.get_doc("Subscription", name, for_update=True))
+					for name in sub_names
+				]
 				for sub in subs:
 					sub._realign_current_period()
 				skipped = [(sub.name, "not due") for sub in subs if not _is_due(sub, run_posting_date)]
@@ -352,14 +393,15 @@ def _run_group(key, sub_names, run_posting_date, *, dry_run, lock_timeout):
 					sub.process(
 						posting_date=run_posting_date
 					)  # the mixin sees the active run -> core process
-				if ctx.active.sink is None:
+				sink = run.sink
+				if sink is None:
 					# every member fell through core's own trigger check after all; nothing to finalise
 					frappe.db.release_savepoint(sp)
 					sp_open = False
 					if not dry_run:
 						_mark_done(ctx, memo_key, "ok")
 					return None
-				summary = _finalize(ctx.active, skipped)
+				summary = _finalize(run, sink, skipped)
 				if dry_run:
 					frappe.db.rollback(save_point=sp)
 					sp_open = False
@@ -427,7 +469,7 @@ def run_consolidated_billing(
 	lock is busy raises ConsolidationLocked (a ValidationError) instead: nothing was attempted and the caller
 	must not treat the party as billed."""
 	frappe.has_permission("Subscription", "write", throw=True)
-	run_posting_date = getdate(posting_date)  # getdate(None) == today
+	run_posting_date = as_date(posting_date)  # as_date(None) == today
 	dry_run = bool(sbool(dry_run))
 	lock_timeout = flt(lock_timeout)
 	names = _candidate_subscriptions(party, party_type, company)

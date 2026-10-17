@@ -163,6 +163,7 @@ class TestAnchor(UnitTestCase):
 			)
 		)
 		self.assertEqual(calendar, BillingProfile("Calendar", CALENDAR_ANCHOR, ""))
+		assert calendar is not None
 		self.assertEqual(calendar.anchor, date(2000, 1, 1))
 
 		anniversary = profile_from_fields(

@@ -2,6 +2,7 @@
 # For license information, please see license.txt
 
 import contextlib
+from typing import TYPE_CHECKING, cast
 
 import frappe
 from erpnext import get_default_company
@@ -13,13 +14,15 @@ from frappe import _
 from frappe.model.meta import get_field_precision
 from frappe.query_builder.functions import Max, Min
 from frappe.types import DF
-from frappe.utils import add_days, add_to_date, cint, escape_html, flt, getdate, nowdate
+from frappe.utils import add_days, add_to_date, cint, escape_html, flt, nowdate
+from frappe.utils.data import DateTimeLikeObject
 
 from automated_subscriptions.automated_subscriptions.billing.anchor import (
 	period_end,
 	prorate_factor,
 	resolve_grid,
 )
+from automated_subscriptions.automated_subscriptions.billing.dates import as_date
 from automated_subscriptions.automated_subscriptions.billing.exceptions import (
 	BackdatedStartNotSupported,
 	ConsolidatedBillingError,
@@ -32,12 +35,18 @@ from automated_subscriptions.automated_subscriptions.billing.profile import (
 	is_consolidating_customer,
 )
 from automated_subscriptions.automated_subscriptions.billing.runner import (
+	RunMember,
 	_active_run,
 	_is_due,
 	_run_ctx,
 	run_consolidated_billing,
 )
 from automated_subscriptions.automated_subscriptions.billing.settings import get_settings
+
+if TYPE_CHECKING:
+	from erpnext.accounts.doctype.subscription_plan.subscription_plan import SubscriptionPlan
+
+	from automated_subscriptions.automated_subscriptions.custom.sales_invoice import AutoSubSalesInvoice
 
 
 @contextlib.contextmanager
@@ -68,7 +77,7 @@ def _submit_suppressed(subscription):
 		subscription.submit_invoice = saved
 
 
-def _line_periods(subscription: str) -> dict[str, frappe._dict]:
+def _line_periods(subscription: str | None) -> dict[str, frappe._dict]:
 	"""Per Sales Invoice, the window this subscription's own lines bill on it (NULL when the lines carry none)."""
 	sii = frappe.qb.DocType("Sales Invoice Item")
 	rows = (
@@ -84,7 +93,7 @@ def _line_periods(subscription: str) -> dict[str, frappe._dict]:
 	return {row.parent: row for row in rows}
 
 
-def billing_invoices(subscription: str) -> list[frappe._dict]:
+def billing_invoices(subscription: str | None) -> list[frappe._dict]:
 	"""Every non-return Sales Invoice that bills `subscription` by header link *or* line link, any docstatus.
 
 	Each row carries core's header dates plus this subscription's own `period_start` / `period_end` on that
@@ -117,7 +126,7 @@ def billing_invoices(subscription: str) -> list[frappe._dict]:
 
 
 def _date_key(value):
-	return getdate(value) if value else getdate("1900-01-01")
+	return as_date(value) if value else as_date("1900-01-01")
 
 
 class AutoSubSubscription(BaseSubscription):
@@ -168,34 +177,34 @@ class AutoSubSubscription(BaseSubscription):
 			# no plan rows, or every plan link blank/unknown (an API insert runs before_insert before the mandatory
 			# check): core's get_last_day fallback keeps the insert alive so mandatory/link validation reports the row
 			return super().get_current_invoice_end(date)
-		date = getdate(date)  # getdate(None) == today, matching core's nowdate() fallback
-		if self.is_trialling() and date < getdate(self.trial_period_end):
-			return getdate(self.trial_period_end)
+		date = as_date(date)  # as_date(None) == today, matching core's nowdate() fallback
+		if self.is_trialling() and date < as_date(self.trial_period_end):
+			return as_date(self.trial_period_end)
 		info = cycle_info[0]  # validate_plans_billing_cycle rejects more than one distinct cycle
 		grid, _units, _pct = self._resolve_grid_for_plan(
 			profile,
 			frappe._dict(
 				name="",
 				price_determination="",
-				billing_interval=info.billing_interval,
-				billing_interval_count=info.billing_interval_count,
+				billing_interval=info["billing_interval"],
+				billing_interval_count=info["billing_interval_count"],
 			),
 			0,
 		)
 		end = period_end(grid, date)
-		if self.end_date and end > getdate(self.end_date):
-			end = getdate(self.end_date)
+		if self.end_date and end > as_date(self.end_date):
+			end = as_date(self.end_date)
 		return end
 
 	def _billing_window(self):
 		"""(start, end) this invoice bills: the current period, narrowed by the from/to dates create_invoice was
 		given (core cancel_subscription passes current_invoice_start..cancelation_date for the arrears invoice)."""
-		start, end = getdate(self.current_invoice_start), getdate(self.current_invoice_end)
+		start, end = as_date(self.current_invoice_start), as_date(self.current_invoice_end)
 		window = self.flags.get("subscription_billing_window")
 		if window:
-			start = max(start, getdate(window[0]))
+			start = max(start, as_date(window[0]))
 			end = min(
-				end, getdate(window[1])
+				end, as_date(window[1])
 			)  # clamp to the term: a late cancel never bills more than the term
 		return start, end
 
@@ -226,7 +235,7 @@ class AutoSubSubscription(BaseSubscription):
 		precision = get_field_precision(frappe.get_meta("Sales Invoice Item").get_field("rate"))
 		items = []
 		for plan in plans:
-			plan_doc = frappe.get_doc("Subscription Plan", plan.plan)
+			plan_doc = cast("SubscriptionPlan", frappe.get_doc("Subscription Plan", plan.plan))
 			grid, units, pct = self._resolve_grid_for_plan(
 				profile, plan_doc, settings.annual_discount_percentage
 			)
@@ -264,8 +273,8 @@ class AutoSubSubscription(BaseSubscription):
 		Returns True when the end was changed. No-op when already aligned or not anchored."""
 		if self._billing_profile() is None or not self.plans or not self.current_invoice_start:
 			return False
-		aligned_end = getdate(self.get_current_invoice_end(self.current_invoice_start))
-		if getdate(self.current_invoice_end) == aligned_end:
+		aligned_end = as_date(self.get_current_invoice_end(self.current_invoice_start))
+		if as_date(self.current_invoice_end) == aligned_end:
 			return False
 		self.current_invoice_end = aligned_end
 		return True
@@ -283,7 +292,7 @@ class AutoSubSubscription(BaseSubscription):
 		)
 
 	@frappe.whitelist()  # core whitelists cancel_subscription (desk button -> run_doc_method -> is_whitelisted)
-	def cancel_subscription(self, cancel_date=None):
+	def cancel_subscription(self, cancel_date: DateTimeLikeObject | None = None):
 		"""Desk button and API: credit the unused service instead of core's arrears invoice when the customer
 		has opted in; `cancel_date` (default today) is the last billed day. The kwarg name is what the desk
 		button passes (`frm.call` -> run_doc_method)."""
@@ -296,7 +305,7 @@ class AutoSubSubscription(BaseSubscription):
 		return cancel_with_credit_note(self.name, cancel_date or nowdate())
 
 	@frappe.whitelist()  # core whitelists process (desk "Fetch Subscription Updates" -> run_doc_method -> is_whitelisted)
-	def process(self, posting_date=None):
+	def process(self, posting_date: DateTimeLikeObject | None = None):
 		"""Realign a period stored before the customer's anchor was set *before* core evaluates the trigger date,
 		the one-cycle cap, the cancel_at_period_end snapshot and is_current_invoice_generated. For "End of the
 		current subscription period" the trigger *is* current_invoice_end, so a stale end would either fire the stub
@@ -325,7 +334,7 @@ class AutoSubSubscription(BaseSubscription):
 		if not self.is_consolidating():
 			return super().process(posting_date)  # stock behaviour
 		ctx = _run_ctx()
-		key = (self.company or get_default_company(), self.party_type, self.party, str(getdate(posting_date)))
+		key = (self.company or get_default_company(), self.party_type, self.party, str(as_date(posting_date)))
 		state = ctx.done.get(key)
 		if state is None:
 			# no company filter: a blank-company sub (core's backward-compat case) must be visited and grouped
@@ -378,7 +387,7 @@ class AutoSubSubscription(BaseSubscription):
 			return sink
 		if self.party_type != "Customer":
 			return super().get_current_invoice()
-		rows = [row for row in billing_invoices(self.name) if row.docstatus < 2]
+		rows = [row for row in billing_invoices(self.name) if row["docstatus"] < 2]
 		if not rows:
 			return None
 		latest = max(
@@ -390,7 +399,7 @@ class AutoSubSubscription(BaseSubscription):
 				row.creation,
 			),
 		)
-		return frappe.get_doc("Sales Invoice", latest.name)
+		return frappe.get_doc("Sales Invoice", latest["name"])
 
 	@property
 	def invoices(self):
@@ -441,7 +450,7 @@ class AutoSubSubscription(BaseSubscription):
 			return super().is_current_invoice_generated(_current_start_date, _current_end_date)
 		if not (_current_start_date and _current_end_date):
 			_current_start_date, _current_end_date = self._get_subscription_period(
-				date=add_days(self.current_invoice_end, 1)
+				date=add_days(as_date(self.current_invoice_end), 1)
 			)
 		invoice = self.current_invoice
 		if not invoice:
@@ -451,8 +460,10 @@ class AutoSubSubscription(BaseSubscription):
 			for d in invoice.get("items") or []
 			if d.get("subscription") == self.name and d.get("subscription_period_start")
 		]
-		anchor = min(starts) if starts else invoice.posting_date  # legacy / stock invoice -> core's rule
-		return getdate(_current_start_date) <= getdate(anchor) <= getdate(_current_end_date)
+		anchor = (
+			min(starts) if starts else invoice.get("posting_date")
+		)  # legacy / stock invoice -> core's rule
+		return as_date(_current_start_date) <= as_date(anchor) <= as_date(_current_end_date)
 
 	def _create_standalone_invoice(self, from_date=None, to_date=None, posting_date=None):
 		profile = self._billing_profile()
@@ -501,8 +512,8 @@ class AutoSubSubscription(BaseSubscription):
 				)
 			sink.append("items", item)
 			existing.add((item["item_code"], description))
-		sink.from_date = min(getdate(sink.from_date), period[0])
-		sink.to_date = max(getdate(sink.to_date), period[1])
+		sink.from_date = min(as_date(sink.from_date), period[0])
+		sink.to_date = max(as_date(sink.to_date), period[1])
 		# core (create_invoice, "Discounts") stamps sub[0]'s fixed additional_discount_amount on the header once;
 		# one standalone invoice per member would subtract it once each, so the sink must carry the sum.
 		# Percentages scale with the total and need no adjustment. Same amount / apply_discount_on / trial
@@ -535,19 +546,22 @@ class AutoSubSubscription(BaseSubscription):
 		)
 		try:
 			period = (
-				getdate(from_date or self.current_invoice_start),
-				getdate(to_date or self.current_invoice_end),
+				as_date(from_date or self.current_invoice_start),
+				as_date(to_date or self.current_invoice_end),
 			)
 			with billing_context(self, ignore_pricing_rule=profile is not None):
 				if run.sink is None:
 					with _submit_suppressed(self):
-						run.sink = super().create_invoice(from_date, to_date, posting_date)  # saved draft
+						# a saved draft
+						run.sink = cast(
+							"AutoSubSalesInvoice", super().create_invoice(from_date, to_date, posting_date)
+						)
 				else:
 					self._absorb_into(run.sink, period)
 		finally:
 			self.flags.pop("subscription_billing_window", None)
 		run.members.append(
-			frappe._dict(
+			RunMember(
 				name=self.name,
 				period=period,
 				submit_invoice=cint(self.submit_invoice),
@@ -597,8 +611,8 @@ class AutoSubSubscription(BaseSubscription):
 					)
 		if self.is_new() and not (frappe.flags.in_import or frappe.flags.in_migrate):
 			# validate runs after before_insert, so current_invoice_end is the stub's end for a new doc.
-			today = getdate(nowdate())
-			stub_end = getdate(self.current_invoice_end)
+			today = as_date(nowdate())
+			stub_end = as_date(self.current_invoice_end)
 			if (
 				profile is not None
 				and not cint(self.generate_new_invoices_past_due_date)
@@ -622,7 +636,18 @@ class AutoSubSubscription(BaseSubscription):
 				# tomorrow at the earliest (Daily cron 0 0 * * *); core caps that late fire at
 				# current_invoice_end + one cycle, so today must be strictly before the cap.
 				cycle = self.get_billing_cycle_data()
-				upper = getdate(add_to_date(stub_end, **cycle)) if cycle else stub_end
+				upper = (
+					as_date(
+						add_to_date(
+							stub_end,
+							years=cycle.get("years", 0),
+							months=cycle.get("months", 0),
+							days=cycle.get("days", 0),
+						)
+					)
+					if cycle
+					else stub_end
+				)
 				if today >= upper:
 					frappe.throw(
 						_(

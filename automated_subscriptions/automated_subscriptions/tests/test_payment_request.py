@@ -17,10 +17,14 @@ from erpnext.accounts.doctype.subscription.test_subscription import (
 	reset_settings,
 )
 from frappe.tests import IntegrationTestCase
-from frappe.utils import add_days, getdate, nowdate
+from frappe.utils import add_days, nowdate
 from payments.payment_gateways.doctype.gocardless_settings.gocardless_settings import GoCardlessSettings
 
-from automated_subscriptions.automated_subscriptions.tests.utils import make_payment_terms_template
+from automated_subscriptions.automated_subscriptions.billing.dates import as_date
+from automated_subscriptions.automated_subscriptions.tests.utils import (
+	get_subscription,
+	make_payment_terms_template,
+)
 
 CUSTOMER = "_Test Customer"
 COMPANY = "_Test Company"
@@ -108,7 +112,7 @@ class TestPaymentRequest(IntegrationTestCase):
 			sub.insert()
 		finally:
 			frappe.flags.in_import = False
-		return frappe.get_doc("Subscription", sub.name)
+		return get_subscription(sub.name)
 
 	def make_invoice(self, plans=(MONTH_PLAN,), posting_date=None, submit=True):
 		"""One subscription per plan; the first sub's own draft (posting_date = its period start) carries the
@@ -130,8 +134,8 @@ class TestPaymentRequest(IntegrationTestCase):
 				},
 			)
 		invoice.save()
-		self.assertEqual(getdate(invoice.posting_date), getdate(posting_date))
-		self.assertEqual(getdate(invoice.due_date), getdate(add_days(posting_date, 15)))
+		self.assertEqual(as_date(invoice.posting_date), as_date(posting_date))
+		self.assertEqual(as_date(invoice.due_date), as_date(add_days(posting_date, 15)))
 		if submit:
 			invoice.submit()
 		return invoice
@@ -154,8 +158,8 @@ class TestPaymentRequest(IntegrationTestCase):
 		self.assertEqual(pr.payment_gateway, GATEWAY)
 		self.assertEqual(pr.is_a_subscription, 0)
 		self.assertEqual(pr.subscription_plans, [])
-		self.assertEqual(getdate(pr.transaction_date), getdate(invoice.due_date))
-		self.assertEqual(getdate(pr.transaction_date), getdate(add_days(invoice.posting_date, 15)))
+		self.assertEqual(as_date(pr.transaction_date), as_date(invoice.due_date))
+		self.assertEqual(as_date(pr.transaction_date), as_date(add_days(invoice.posting_date, 15)))
 		self.assertEqual(pr.mute_email, 1)
 		self.assertEqual(pr.docstatus, 1)
 		self.assertEqual(pr.status, "Requested")
@@ -194,11 +198,11 @@ class TestPaymentRequest(IntegrationTestCase):
 		with patch.object(PaymentRequest, VALIDATION, return_value=False) as validation:
 			invoice = self.make_invoice(posting_date=posting)
 		validation.assert_not_called()
-		self.assertEqual(getdate(invoice.due_date), getdate(add_days(self.today, -45)))
+		self.assertEqual(as_date(invoice.due_date), as_date(add_days(self.today, -45)))
 		pr = self.single_request(invoice)
 		self.assertEqual(pr.docstatus, 0)
 		self.assertEqual(pr.payment_gateway_account, self.account)
-		self.assertEqual(getdate(pr.transaction_date), getdate(invoice.due_date))
+		self.assertEqual(as_date(pr.transaction_date), as_date(invoice.due_date))
 		self.assertEqual(error_log_count(title), before + 1)
 		self.assertGreaterEqual(
 			error_log_count(f"Stale subscription invoice not auto-charged: {invoice.name}"), 1
@@ -254,10 +258,10 @@ class TestPaymentRequest(IntegrationTestCase):
 		with patch.object(PaymentRequest, VALIDATION, return_value=False) as validation:
 			invoice = self.make_invoice(posting_date=add_days(self.today, -3))
 		validation.assert_called()
-		self.assertEqual(getdate(invoice.due_date), getdate(add_days(self.today, 12)))
+		self.assertEqual(as_date(invoice.due_date), as_date(add_days(self.today, 12)))
 		pr = self.single_request(invoice)
 		self.assertEqual(pr.docstatus, 1)
-		self.assertEqual(getdate(pr.transaction_date), getdate(invoice.due_date))
+		self.assertEqual(as_date(pr.transaction_date), as_date(invoice.due_date))
 
 	# ---- (h)
 	def test_return_creates_no_pr(self):
@@ -315,4 +319,4 @@ class TestPaymentRequest(IntegrationTestCase):
 		charge.assert_called()
 		data = charge.call_args.args[0]
 		self.assertEqual(data["mandate"], "MD000AUTOSUBTEST")
-		self.assertEqual(data["charge_date"], str(getdate(invoice.due_date)))
+		self.assertEqual(data["charge_date"], str(as_date(invoice.due_date)))

@@ -17,9 +17,9 @@ from erpnext.accounts.doctype.subscription.test_subscription import (
 	reset_settings,
 )
 from frappe.tests import IntegrationTestCase
-from frappe.utils import getdate
 
 from automated_subscriptions.automated_subscriptions.billing.credit_note import cancel_with_credit_note
+from automated_subscriptions.automated_subscriptions.billing.dates import as_date
 from automated_subscriptions.automated_subscriptions.billing.exceptions import (
 	CreditNoteAlreadyIssued,
 	SubscriptionBillingError,
@@ -29,7 +29,12 @@ from automated_subscriptions.automated_subscriptions.tests.test_payment_request 
 	make_gateway_account,
 	set_plan_gateway,
 )
-from automated_subscriptions.automated_subscriptions.tests.utils import frozen_today, make_anchored_customer
+from automated_subscriptions.automated_subscriptions.tests.utils import (
+	frozen_today,
+	get_invoice,
+	get_subscription,
+	make_anchored_customer,
+)
 
 COMPANY = "_Test Company"
 CUSTOMER = "_Test AS CN Customer"
@@ -102,13 +107,13 @@ class TestCreditNote(IntegrationTestCase):
 				sub.insert()
 			finally:
 				frappe.flags.in_import = False
-		return frappe.get_doc("Subscription", sub.name)
+		return get_subscription(sub.name)
 
 	def bill(self, posting_date=JAN_1, party=CUSTOMER):
 		with frozen_today(posting_date):
 			run_consolidated_billing(posting_date, party=party)
 		names = invoices_for(party)
-		return frappe.get_doc("Sales Invoice", names[-1])
+		return get_invoice(names[-1])
 
 	def billed_sub(self, plan=PLAN_31, qty=1):
 		sub = self.make_sub(plan, qty)
@@ -116,10 +121,10 @@ class TestCreditNote(IntegrationTestCase):
 		self.assertEqual([d.subscription for d in invoice.items], [sub.name])
 		self.assertEqual(
 			(
-				getdate(invoice.items[0].subscription_period_start),
-				getdate(invoice.items[0].subscription_period_end),
+				as_date(invoice.items[0].subscription_period_start),
+				as_date(invoice.items[0].subscription_period_end),
 			),
-			(getdate("2018-01-01"), getdate("2018-01-31")),
+			(as_date("2018-01-01"), as_date("2018-01-31")),
 		)
 		return sub, invoice
 
@@ -135,7 +140,7 @@ class TestCreditNote(IntegrationTestCase):
 	def single_credit_note(self, invoice):
 		names = credit_notes_against(invoice.name)
 		self.assertEqual(len(names), 1, names)
-		return frappe.get_doc("Sales Invoice", names[0])
+		return get_invoice(names[0])
 
 	# ---- 1
 	def test_half_month_credit(self):
@@ -150,7 +155,7 @@ class TestCreditNote(IntegrationTestCase):
 		self.assertEqual(cn.docstatus, 1)
 		self.assertEqual(cn.is_return, 1)
 		self.assertEqual(cn.return_against, invoice.name)
-		self.assertEqual(getdate(cn.posting_date), getdate("2018-01-16"))
+		self.assertEqual(as_date(cn.posting_date), as_date("2018-01-16"))
 		self.assertEqual(cn.status, "Return")
 		self.assertEqual(cn.update_outstanding_for_self, 1)
 		self.assertEqual(cn.outstanding_amount, -15.0)
@@ -164,8 +169,8 @@ class TestCreditNote(IntegrationTestCase):
 		self.assertEqual(row.amount, -15.0)
 		self.assertEqual(row.sales_invoice_item, invoice.items[0].name)
 		self.assertEqual(row.subscription, sub.name)
-		self.assertEqual(getdate(row.subscription_period_start), getdate("2018-01-17"))
-		self.assertEqual(getdate(row.subscription_period_end), getdate("2018-01-31"))
+		self.assertEqual(as_date(row.subscription_period_start), as_date("2018-01-17"))
+		self.assertEqual(as_date(row.subscription_period_end), as_date("2018-01-31"))
 		self.assertIn("15 of 31 days", row.description)
 
 		invoice.reload()
@@ -174,7 +179,7 @@ class TestCreditNote(IntegrationTestCase):
 
 		sub.reload()
 		self.assertEqual(sub.status, "Cancelled")
-		self.assertEqual(getdate(sub.cancelation_date), getdate("2018-01-16"))
+		self.assertEqual(as_date(sub.cancelation_date), as_date("2018-01-16"))
 		self.assertEqual(sub.has_outstanding_invoice(), 0)
 
 		gl = frappe.get_all(
@@ -235,7 +240,7 @@ class TestCreditNote(IntegrationTestCase):
 		self.assertEqual(credit_notes_against(invoice.name), [])
 		sub.reload()
 		self.assertEqual(sub.status, "Cancelled")
-		self.assertEqual(getdate(sub.cancelation_date), getdate("2018-02-05"))
+		self.assertEqual(as_date(sub.cancelation_date), as_date("2018-02-05"))
 
 	# ---- 5
 	def test_future_prepaid_line(self):
@@ -243,7 +248,7 @@ class TestCreditNote(IntegrationTestCase):
 		self.pay(january)  # an unpaid January past its due date would block February (stock past-due gate)
 		february = self.bill("2018-02-01")
 		self.assertNotEqual(february.name, january.name)
-		self.assertEqual(getdate(february.items[0].subscription_period_start), getdate("2018-02-01"))
+		self.assertEqual(as_date(february.items[0].subscription_period_start), as_date("2018-02-01"))
 
 		result = self.cancel(sub, "2018-01-20")
 
@@ -251,10 +256,10 @@ class TestCreditNote(IntegrationTestCase):
 		cn_jan = self.single_credit_note(january)
 		cn_feb = self.single_credit_note(february)
 		self.assertEqual(cn_jan.grand_total, -11.0)  # unused 11 of 31 days
-		self.assertEqual(getdate(cn_jan.posting_date), getdate("2018-01-20"))
+		self.assertEqual(as_date(cn_jan.posting_date), as_date("2018-01-20"))
 		self.assertEqual(cn_feb.grand_total, -31.0)  # the whole prepaid period
-		self.assertEqual(getdate(cn_feb.posting_date), getdate("2018-02-01"))  # max(cancel_date, ref posting)
-		self.assertEqual(getdate(cn_feb.items[0].subscription_period_start), getdate("2018-02-01"))
+		self.assertEqual(as_date(cn_feb.posting_date), as_date("2018-02-01"))  # max(cancel_date, ref posting)
+		self.assertEqual(as_date(cn_feb.items[0].subscription_period_start), as_date("2018-02-01"))
 		self.assertEqual(result["credited"], 42.0)
 
 	# ---- 6
@@ -379,7 +384,7 @@ class TestCreditNote(IntegrationTestCase):
 		cn = self.single_credit_note(invoice)
 		self.assertEqual(cn.grand_total, -15.0)
 		sub.reload()
-		self.assertEqual(getdate(sub.cancelation_date), getdate("2018-01-16"))
+		self.assertEqual(as_date(sub.cancelation_date), as_date("2018-01-16"))
 
 		# both flags off -> stock
 		frappe.db.set_value("Customer", STOCK_CUSTOMER, "consolidate_subscription_invoices", 0)

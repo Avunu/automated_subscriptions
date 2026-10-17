@@ -9,9 +9,10 @@ from erpnext.accounts.doctype.process_subscription.process_subscription import (
 )
 from erpnext.accounts.doctype.subscription.subscription import process_all
 from frappe.types import DF
+from frappe.utils.data import DateTimeLikeObject
 
 
-def process_customer_subscriptions(names: list[str], posting_date: str | None) -> None:
+def process_customer_subscriptions(names: list[str], posting_date: DateTimeLikeObject | None) -> None:
 	"""The customer path of Process Subscription, run once the submit is committed (see the class docstring).
 
 	One submitted document is one run. The run memo (billing/runner.py _run_ctx) lives on frappe.local, which a

@@ -15,8 +15,9 @@ from erpnext.accounts.doctype.sales_invoice.sales_invoice import SalesInvoice as
 from erpnext.accounts.utils import refresh_subscription_status as refresh_one_subscription
 from frappe import _
 from frappe.types import DF
-from frappe.utils import add_days, cint, flt, getdate, nowdate
+from frappe.utils import add_days, cint, flt, nowdate
 
+from automated_subscriptions.automated_subscriptions.billing.dates import as_date
 from automated_subscriptions.automated_subscriptions.billing.settings import get_settings
 from automated_subscriptions.automated_subscriptions.custom.sales_invoice_item import SalesInvoiceItem
 
@@ -64,7 +65,9 @@ class AutoSubSalesInvoice(BaseSalesInvoice):
 	first call already applies Pricing Rules (set_missing_item_details -> apply_pricing_rule_on_items) while
 	ignore_pricing_rule is still 0 - too early for the before_validate doc_event alone."""
 
-	items: DF.Table[SalesInvoiceItem]  # pyright: ignore[reportIncompatibleVariableOverride]
+	# The rows carry this app's custom fields, which SalesInvoiceItem only declares the types of. Narrowing the
+	# element type of the invariant list is the point, so the checkers' override rule is silenced for it.
+	items: DF.Table[SalesInvoiceItem]  # pyright: ignore[reportIncompatibleVariableOverride]  # ty: ignore[invalid-attribute-override]
 
 	# core whitelists set_missing_values and the desk calls it via run_doc_method when is_pos is ticked
 	# (sales_invoice.js set_pos_data); is_whitelisted checks the resolved function object, so the override
@@ -80,7 +83,7 @@ class AutoSubSalesInvoice(BaseSalesInvoice):
 		None` frappe's type validation enforces: every subscription invoice whose customer has a Payment Terms
 		Template failed with FrappeTypeError. The ISO string is the same date in the form a desk save sends."""
 		if isinstance(self.posting_date, date):
-			self.posting_date = getdate(self.posting_date).isoformat()
+			self.posting_date = as_date(self.posting_date).isoformat()
 		return super().set_payment_schedule()
 
 	def refresh_subscription_status(self):
@@ -163,14 +166,14 @@ def subscription_payment_request(doc: BaseSalesInvoice, method=None):
 	# such plan's gateway against the request's; a consolidated invoice bills other subscriptions' plans too
 	pr.is_a_subscription = 0
 	pr.set("subscription_plans", [])
-	due_date = getdate(doc.due_date or doc.posting_date)
+	due_date = as_date(doc.due_date or doc.posting_date)
 	# the payment-terms due date is the collection date. An ISO string, not a date: stock payments' GoCardless
 	# compares it with the mandate's next_possible_charge_date (a string from the API) via max(), and a date there
 	# raises TypeError, which payment_gateway_validation swallows into False: no charge and no email
 	pr.transaction_date = due_date.isoformat()
 	pr.save(ignore_permissions=True)
 	max_lateness = cint(get_settings().auto_charge_max_lateness_days)
-	if due_date < getdate(add_days(nowdate(), -max_lateness)):
+	if due_date < as_date(add_days(nowdate(), -max_lateness)):
 		pr.add_comment(
 			"Comment",
 			_("Left as draft: due date {0} is more than {1} days in the past. Charge manually.").format(

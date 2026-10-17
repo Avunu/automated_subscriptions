@@ -2,6 +2,7 @@
 # For license information, please see license.txt
 
 from datetime import date
+from typing import TYPE_CHECKING, cast
 from unittest.mock import patch
 
 import frappe
@@ -14,9 +15,10 @@ from erpnext.accounts.doctype.subscription.test_subscription import (
 	reset_settings,
 )
 from frappe.tests import IntegrationTestCase
-from frappe.utils import add_days, add_to_date, flt, getdate, nowdate
+from frappe.utils import add_days, add_to_date, flt, nowdate
 
 from automated_subscriptions.automated_subscriptions.billing.anchor import Grid, period_end
+from automated_subscriptions.automated_subscriptions.billing.dates import as_date
 from automated_subscriptions.automated_subscriptions.billing.exceptions import (
 	BackdatedStartNotSupported,
 	UnsupportedBillingGrid,
@@ -24,8 +26,13 @@ from automated_subscriptions.automated_subscriptions.billing.exceptions import (
 )
 from automated_subscriptions.automated_subscriptions.tests.utils import (
 	frozen_today,
+	get_invoice,
 	make_anchored_customer,
+	make_payment_terms_template,
 )
+
+if TYPE_CHECKING:
+	from automated_subscriptions.automated_subscriptions.custom.subscription import AutoSubSubscription
 
 CALENDAR = "_Test AS Calendar Customer"
 CALENDAR_YEAR = "_Test AS Calendar Year Customer"
@@ -44,7 +51,7 @@ def invoice_for(sub):
 
 def invoices_for(sub):
 	return [
-		frappe.get_doc("Sales Invoice", name)
+		get_invoice(name)
 		for name in frappe.get_all(
 			"Sales Invoice", {"subscription": sub.name}, order_by="from_date asc", pluck="name"
 		)
@@ -89,8 +96,8 @@ class TestProration(IntegrationTestCase):
 			)
 
 	def assert_period(self, doc, start, end, start_field="from_date", end_field="to_date"):
-		self.assertEqual(getdate(doc.get(start_field)), getdate(start))
-		self.assertEqual(getdate(doc.get(end_field)), getdate(end))
+		self.assertEqual(as_date(doc.get(start_field)), as_date(start))
+		self.assertEqual(as_date(doc.get(end_field)), as_date(end))
 
 	def assert_current_period(self, sub, start, end):
 		self.assert_period(sub, start, end, "current_invoice_start", "current_invoice_end")
@@ -114,7 +121,7 @@ class TestProration(IntegrationTestCase):
 		self.assertIsNone(line.service_end_date)
 		self.assertEqual(invoice.ignore_pricing_rule, 1)
 		self.assertEqual(invoice.docstatus, 1)
-		self.assertEqual(getdate(invoice.posting_date), date(2026, 4, 15))
+		self.assertEqual(as_date(invoice.posting_date), date(2026, 4, 15))
 		self.assertEqual(sub.status, "Active")
 
 	# ---- 2
@@ -192,10 +199,10 @@ class TestProration(IntegrationTestCase):
 				days_until_due=15,
 			)
 
-		self.assertEqual(getdate(sub.current_invoice_start), getdate(add_days(trial_end, 1)))
+		self.assertEqual(as_date(sub.current_invoice_start), as_date(add_days(trial_end, 1)))
 		self.assertEqual(
-			getdate(sub.current_invoice_end),
-			period_end(Grid(date(2000, 1, 1), "Year"), getdate(add_days(trial_end, 1))),
+			as_date(sub.current_invoice_end),
+			period_end(Grid(date(2000, 1, 1), "Year"), as_date(add_days(trial_end, 1))),
 		)
 		self.assert_current_period(sub, "2026-05-16", "2026-12-31")
 		self.assertEqual(sub.status, "Trialing")
@@ -240,7 +247,7 @@ class TestProration(IntegrationTestCase):
 		)  # _Test Customer: no anchor
 		self.assertIsNone(sub._billing_profile())
 		end = add_to_date(start, months=1, days=-1)
-		self.assertEqual(getdate(sub.current_invoice_end), getdate(end))
+		self.assertEqual(as_date(sub.current_invoice_end), as_date(end))
 
 		# "End of the current subscription period" only fires at the period end (core can_generate_new_invoice:
 		# posting < trigger -> False), so process at the period end with today frozen there
@@ -258,8 +265,8 @@ class TestProration(IntegrationTestCase):
 		line = invoice.items[0]
 		self.assertEqual(line.subscription, sub.name)
 		self.assertEqual(line.subscription_plan, MONTH_PLAN)
-		self.assertEqual(getdate(line.subscription_period_start), getdate(start))
-		self.assertEqual(getdate(line.subscription_period_end), getdate(end))
+		self.assertEqual(as_date(line.subscription_period_start), as_date(start))
+		self.assertEqual(as_date(line.subscription_period_end), as_date(end))
 		# stock period roll-over after billing
 		self.assert_current_period(sub, add_to_date(start, months=1), add_to_date(start, months=2, days=-1))
 
@@ -449,12 +456,12 @@ class TestProration(IntegrationTestCase):
 			CALENDAR, MONTH_PLAN, "2026-06-10", today=today, generate_new_invoices_past_due_date=1
 		)
 		self.assertEqual(
-			[(getdate(i.from_date), getdate(i.to_date), i.items[0].rate) for i in invoices_for(sub)],
+			[(as_date(i.from_date), as_date(i.to_date), i.items[0].rate) for i in invoices_for(sub)],
 			[
-				(getdate("2026-06-10"), getdate("2026-06-30"), 630.0),
-				(getdate("2026-07-01"), getdate("2026-07-31"), 900.0),
-				(getdate("2026-08-01"), getdate("2026-08-31"), 900.0),
-				(getdate("2026-09-01"), getdate("2026-09-30"), 900.0),
+				(as_date("2026-06-10"), as_date("2026-06-30"), 630.0),
+				(as_date("2026-07-01"), as_date("2026-07-31"), 900.0),
+				(as_date("2026-08-01"), as_date("2026-08-31"), 900.0),
+				(as_date("2026-09-01"), as_date("2026-09-30"), 900.0),
 			],
 		)
 		self.assert_current_period(sub, "2026-10-01", "2026-10-31")
@@ -617,27 +624,20 @@ class TestProration(IntegrationTestCase):
 	# ---- 17
 	def test_due_date_from_template_when_days_until_due_zero(self):
 		template = "_Test AS NET15"
-		if not frappe.db.exists("Payment Terms Template", template):
-			doc = frappe.new_doc("Payment Terms Template")
-			doc.template_name = template
-			doc.append(
-				"terms",
-				{"invoice_portion": 100, "credit_days": 15, "due_date_based_on": "Day(s) after invoice date"},
-			)
-			doc.insert(ignore_permissions=True)
+		make_payment_terms_template(template, 15)
 		frappe.db.set_value("Customer", CALENDAR, "payment_terms", template)
 
 		sub = self.anchored_subscription(CALENDAR, YEAR_PLAN, "2026-04-15", days_until_due=0)
 		invoice = invoice_for(sub)
-		self.assertEqual(getdate(invoice.posting_date), date(2026, 4, 15))
-		self.assertEqual(getdate(invoice.due_date), getdate(add_days(invoice.posting_date, 15)))
+		self.assertEqual(as_date(invoice.posting_date), date(2026, 4, 15))
+		self.assertEqual(as_date(invoice.due_date), as_date(add_days(invoice.posting_date, 15)))
 		self.assertEqual(len(invoice.payment_schedule), 1)
 		self.assertEqual(invoice.payment_terms_template, template)
 
 		# a preset days_until_due row wins (stock precedence)
 		sub = self.anchored_subscription(CALENDAR, YEAR_PLAN, "2026-04-15", days_until_due=5)
 		invoice = invoice_for(sub)
-		self.assertEqual(getdate(invoice.due_date), getdate(add_days(invoice.posting_date, 5)))
+		self.assertEqual(as_date(invoice.due_date), as_date(add_days(invoice.posting_date, 5)))
 		self.assertEqual(len(invoice.payment_schedule), 1)
 
 	# ---- 18
@@ -719,7 +719,7 @@ class TestProration(IntegrationTestCase):
 		self.assert_period(stub, "2026-10-02", "2026-10-31")
 		self.assertEqual(stub.items[0].rate, flt(900 * 30 / 31, 2))
 		self.assertEqual(stub.items[0].rate, 870.97)
-		self.assertEqual(getdate(stub.items[0].subscription_period_end), getdate("2026-10-31"))
+		self.assertEqual(as_date(stub.items[0].subscription_period_end), as_date("2026-10-31"))
 		self.assert_current_period(sub, "2026-11-01", "2026-11-30")
 		sub.reload()
 		self.assert_current_period(sub, "2026-11-01", "2026-11-30")
@@ -769,7 +769,7 @@ class TestProration(IntegrationTestCase):
 		invoices = invoices_for(sub)
 		self.assertEqual(len(invoices), 1)
 		stub = invoices[0]
-		self.assertEqual(getdate(stub.posting_date), getdate("2026-12-31"))  # == today, never in the future
+		self.assertEqual(as_date(stub.posting_date), as_date("2026-12-31"))  # == today, never in the future
 		self.assert_period(stub, "2026-04-15", "2026-12-31")
 		self.assert_period(
 			stub.items[0], "2026-04-15", "2026-12-31", "subscription_period_start", "subscription_period_end"
@@ -814,7 +814,7 @@ class TestProration(IntegrationTestCase):
 		invoices = invoices_for(sub)
 		self.assertEqual(len(invoices), 1)
 		stub = invoices[0]
-		self.assertEqual(getdate(stub.posting_date), getdate("2026-12-31"))  # == today, never in the future
+		self.assertEqual(as_date(stub.posting_date), as_date("2026-12-31"))  # == today, never in the future
 		self.assert_period(stub, "2026-10-02", "2026-12-31")
 		self.assertEqual(
 			stub.items[0].rate, flt(900 * 91 / 365 * 12 * 0.75, 2)
@@ -826,7 +826,7 @@ class TestProration(IntegrationTestCase):
 	def test_process_override_stays_whitelisted(self):
 		# core whitelists process (desk "Fetch Subscription Updates" -> run_doc_method -> is_whitelisted per
 		# function object), so the extend_doctype_class override must re-declare it
-		fn = frappe.new_doc("Subscription").process.__func__
+		fn = cast("AutoSubSubscription", frappe.new_doc("Subscription")).process.__func__
 		self.assertEqual(fn.__module__, "automated_subscriptions.automated_subscriptions.custom.subscription")
 		self.assertIn(fn, frappe.whitelisted)
 		frappe.is_whitelisted(fn)  # must not raise PermissionError
