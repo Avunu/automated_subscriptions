@@ -1,3 +1,6 @@
+# Copyright (c) 2026, Avunu LLC and contributors
+# For license information, please see license.txt
+
 import contextlib
 
 import frappe
@@ -184,6 +187,34 @@ class Subscription(BaseSubscription):
 			end = getdate(self.end_date)
 		return end
 
+	def _billing_window(self):
+		"""(start, end) this invoice bills: the current period, narrowed by the from/to dates create_invoice was
+		given (core cancel_subscription passes current_invoice_start..cancelation_date for the arrears invoice)."""
+		start, end = getdate(self.current_invoice_start), getdate(self.current_invoice_end)
+		window = self.flags.get("subscription_billing_window")
+		if window:
+			start = max(start, getdate(window[0]))
+			end = min(
+				end, getdate(window[1])
+			)  # clamp to the term: a late cancel never bills more than the term
+		return start, end
+
+	def _enrich_items(self, plans, items):
+		"""Additive per-line metadata on both paths: subscription / plan links, the billed period and the
+		description from service_identifier. Purchase Invoice Item has none of these columns."""
+		if self.party_type != "Customer":
+			return items
+		start, end = self._billing_window()
+		description = escape_html(self.get("service_identifier") or "") or None
+		for plan, item in zip(plans, items, strict=True):  # core appends exactly one item per plan row
+			item["subscription"] = self.name
+			item["subscription_plan"] = plan.plan
+			item["subscription_period_start"] = start
+			item["subscription_period_end"] = end
+			if description:
+				item["description"] = description
+		return items
+
 	def get_items_from_plans(self, plans, prorate=0):
 		"""Anchored: day-accurate proration of the plan rate over the anchored term; core's get_prorata_factor
 		is never consulted. Stock: core's items plus the per-line metadata."""
@@ -226,34 +257,6 @@ class Subscription(BaseSubscription):
 					item[dimension] = plan_doc.get(dimension)
 			items.append(item)
 		return self._enrich_items(plans, items)
-
-	def _enrich_items(self, plans, items):
-		"""Additive per-line metadata on both paths: subscription / plan links, the billed period and the
-		description from service_identifier. Purchase Invoice Item has none of these columns."""
-		if self.party_type != "Customer":
-			return items
-		start, end = self._billing_window()
-		description = escape_html(self.get("service_identifier") or "") or None
-		for plan, item in zip(plans, items, strict=True):  # core appends exactly one item per plan row
-			item["subscription"] = self.name
-			item["subscription_plan"] = plan.plan
-			item["subscription_period_start"] = start
-			item["subscription_period_end"] = end
-			if description:
-				item["description"] = description
-		return items
-
-	def _billing_window(self):
-		"""(start, end) this invoice bills: the current period, narrowed by the from/to dates create_invoice was
-		given (core cancel_subscription passes current_invoice_start..cancelation_date for the arrears invoice)."""
-		start, end = getdate(self.current_invoice_start), getdate(self.current_invoice_end)
-		window = self.flags.get("subscription_billing_window")
-		if window:
-			start = max(start, getdate(window[0]))
-			end = min(
-				end, getdate(window[1])
-			)  # clamp to the term: a late cancel never bills more than the term
-		return start, end
 
 	def _realign_current_period(self) -> bool:
 		"""Anchored subs whose stored period predates the customer's anchor (M5, or any later anchor change)
@@ -451,52 +454,6 @@ class Subscription(BaseSubscription):
 		anchor = min(starts) if starts else invoice.posting_date  # legacy / stock invoice -> core's rule
 		return getdate(_current_start_date) <= getdate(anchor) <= getdate(_current_end_date)
 
-	def create_invoice(self, from_date=None, to_date=None, posting_date=None):
-		"""Outside a consolidation run (or for a non-consolidating customer): the standalone invoice. Inside a
-		run: sub[0] creates the sink through core's own create_invoice (submission suppressed), every later sub
-		absorbs its lines into that same draft object; the runner submits it once. A sub's *second*
-		create_invoice in one run (core's cancellation arrears) stays standalone, exactly like stock."""
-		run = _active_run()
-		if run is None or not self.is_consolidating():
-			return self._create_standalone_invoice(from_date, to_date, posting_date)
-		if from_date or to_date or any(m.name == self.name for m in run.members):
-			# core's cancel_subscription (cancel_at_period_end / end_date branches of process()) generates a
-			# second, explicitly windowed arrears invoice for the sub whose period invoice already went into
-			# the sink; core produces a separate invoice there and its duplicate-line check
-			# (allow_multiple_items = 0) would reject the same lines twice on one sink, so keep that invoice
-			# standalone exactly like stock
-			return self._create_standalone_invoice(from_date, to_date, posting_date)
-		profile = self._billing_profile()
-		if profile is not None:
-			self._realign_current_period()  # the period below must be the aligned one
-		self.flags.subscription_billing_window = (
-			from_date or self.current_invoice_start,
-			to_date or self.current_invoice_end,
-		)
-		try:
-			period = (
-				getdate(from_date or self.current_invoice_start),
-				getdate(to_date or self.current_invoice_end),
-			)
-			with billing_context(self, ignore_pricing_rule=profile is not None):
-				if run.sink is None:
-					with _submit_suppressed(self):
-						run.sink = super().create_invoice(from_date, to_date, posting_date)  # saved draft
-				else:
-					self._absorb_into(run.sink, period)
-		finally:
-			self.flags.pop("subscription_billing_window", None)
-		run.members.append(
-			frappe._dict(
-				name=self.name,
-				period=period,
-				submit_invoice=cint(self.submit_invoice),
-				service_identifier=self.get("service_identifier"),
-			)
-		)
-		self.flags.consolidation_current_invoice = run.sink  # grace-period guard, see get_current_invoice
-		return run.sink
-
 	def _create_standalone_invoice(self, from_date=None, to_date=None, posting_date=None):
 		profile = self._billing_profile()
 		if profile is not None:
@@ -553,6 +510,67 @@ class Subscription(BaseSubscription):
 		if flt(self.additional_discount_amount) and not self.is_trialling():
 			sink.discount_amount = flt(sink.discount_amount) + flt(self.additional_discount_amount)
 		sink.save()
+
+	def create_invoice(self, from_date=None, to_date=None, posting_date=None):
+		"""Outside a consolidation run (or for a non-consolidating customer): the standalone invoice. Inside a
+		run: sub[0] creates the sink through core's own create_invoice (submission suppressed), every later sub
+		absorbs its lines into that same draft object; the runner submits it once. A sub's *second*
+		create_invoice in one run (core's cancellation arrears) stays standalone, exactly like stock."""
+		run = _active_run()
+		if run is None or not self.is_consolidating():
+			return self._create_standalone_invoice(from_date, to_date, posting_date)
+		if from_date or to_date or any(m.name == self.name for m in run.members):
+			# core's cancel_subscription (cancel_at_period_end / end_date branches of process()) generates a
+			# second, explicitly windowed arrears invoice for the sub whose period invoice already went into
+			# the sink; core produces a separate invoice there and its duplicate-line check
+			# (allow_multiple_items = 0) would reject the same lines twice on one sink, so keep that invoice
+			# standalone exactly like stock
+			return self._create_standalone_invoice(from_date, to_date, posting_date)
+		profile = self._billing_profile()
+		if profile is not None:
+			self._realign_current_period()  # the period below must be the aligned one
+		self.flags.subscription_billing_window = (
+			from_date or self.current_invoice_start,
+			to_date or self.current_invoice_end,
+		)
+		try:
+			period = (
+				getdate(from_date or self.current_invoice_start),
+				getdate(to_date or self.current_invoice_end),
+			)
+			with billing_context(self, ignore_pricing_rule=profile is not None):
+				if run.sink is None:
+					with _submit_suppressed(self):
+						run.sink = super().create_invoice(from_date, to_date, posting_date)  # saved draft
+				else:
+					self._absorb_into(run.sink, period)
+		finally:
+			self.flags.pop("subscription_billing_window", None)
+		run.members.append(
+			frappe._dict(
+				name=self.name,
+				period=period,
+				submit_invoice=cint(self.submit_invoice),
+				service_identifier=self.get("service_identifier"),
+			)
+		)
+		self.flags.consolidation_current_invoice = run.sink  # grace-period guard, see get_current_invoice
+		return run.sink
+
+	def _catch_up_is_deferred(self) -> bool:
+		"""True when after_insert will not bill the stub synchronously (see generate_invoices_till_date).
+
+		The daily run is capped at one cycle past current_invoice_end (core can_generate_new_invoice) and then
+		re-anchors the period to today, silently losing the stub; validate() rejects inserts on or past that cap.
+		With generate_new_invoices_past_due_date off the tighter "period already ended" check in validate()
+		applies in every mode (PR 3 relies on this helper for consolidating subs)."""
+		if (
+			self.is_consolidating()
+		):  # PR 3 routes these through the runner (enqueued), never the catch-up loop
+			return True
+		return (
+			self._billing_profile() is not None and get_settings().mid_term_billing_mode == "Next Daily Run"
+		)
 
 	def validate(self):
 		super().validate()
@@ -615,21 +633,6 @@ class Subscription(BaseSubscription):
 						).format(self.start_date),
 						BackdatedStartNotSupported,
 					)
-
-	def _catch_up_is_deferred(self) -> bool:
-		"""True when after_insert will not bill the stub synchronously (see generate_invoices_till_date).
-
-		The daily run is capped at one cycle past current_invoice_end (core can_generate_new_invoice) and then
-		re-anchors the period to today, silently losing the stub; validate() rejects inserts on or past that cap.
-		With generate_new_invoices_past_due_date off the tighter "period already ended" check in validate()
-		applies in every mode (PR 3 relies on this helper for consolidating subs)."""
-		if (
-			self.is_consolidating()
-		):  # PR 3 routes these through the runner (enqueued), never the catch-up loop
-			return True
-		return (
-			self._billing_profile() is not None and get_settings().mid_term_billing_mode == "Next Daily Run"
-		)
 
 	def generate_invoices_till_date(self) -> None:
 		"""Override this, not after_insert, so core's in_import / in_migrate / future-start checks stay in force."""

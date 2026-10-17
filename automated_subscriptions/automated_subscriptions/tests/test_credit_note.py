@@ -1,3 +1,6 @@
+# Copyright (c) 2026, Avunu LLC and contributors
+# For license information, please see license.txt
+
 """Mid-term cancellation with a Credit Note (PR 5, DECISIONS.md D-12).
 
 Subscriptions are billed through the PR 3 runner so every January line carries its own link and period; the

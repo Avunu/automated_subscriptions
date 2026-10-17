@@ -1,3 +1,6 @@
+# Copyright (c) 2026, Avunu LLC and contributors
+# For license information, please see license.txt
+
 """Sales Invoice side of the engine: the billing-policy hook (PR 2), the subscription lookups' fan-out
 (status refresh over every subscription an invoice bills) and the Payment Request that auto-charges a
 subscription invoice on submit.

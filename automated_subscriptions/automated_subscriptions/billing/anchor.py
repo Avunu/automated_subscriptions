@@ -1,3 +1,6 @@
+# Copyright (c) 2026, Avunu LLC and contributors
+# For license information, please see license.txt
+
 """Pure anchored-billing date math. No frappe.db, no frappe.local."""
 
 import calendar

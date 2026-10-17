@@ -1,3 +1,6 @@
+# Copyright (c) 2026, Avunu LLC and contributors
+# For license information, please see license.txt
+
 """Mid-term cancellation with a Credit Note for the unused remainder of every billed line.
 
 The subscription is cancelled effective `cancel_date` (inclusive: the cancel day is still billed). For every
@@ -27,55 +30,6 @@ from automated_subscriptions.automated_subscriptions.billing.exceptions import (
 )
 from automated_subscriptions.automated_subscriptions.billing.runner import party_lock_name
 from automated_subscriptions.automated_subscriptions.billing.settings import get_settings
-
-
-@frappe.whitelist()
-def cancel_with_credit_note(subscription: str, cancel_date=None, posting_date=None) -> dict:
-	"""Cancel `subscription` effective `cancel_date` (default today) and credit the unused service.
-
-	`posting_date` is only for a cancel date that falls in a frozen or closed period: the credit notes are
-	posted on it while the credited window is still computed from `cancel_date`.
-	Returns {"subscription", "credit_notes": [names], "credited": total credited (positive)}."""
-	sub = frappe.get_doc("Subscription", subscription)
-	frappe.has_permission("Subscription", "write", doc=sub, throw=True)
-	frappe.has_permission("Sales Invoice", "submit", throw=True)
-
-	if sub.status == "Cancelled":
-		frappe.throw(_("subscription is already cancelled."), InvoiceCancelled)
-	if sub.party_type != "Customer":
-		frappe.throw(
-			_("Credit notes on cancellation are only supported for Customer subscriptions."),
-			SubscriptionBillingError,
-		)
-	if sub.generate_invoice_at == "End of the current subscription period":
-		frappe.throw(
-			_("{0} is billed in arrears; nothing is prepaid. Use Cancel Subscription instead.").format(
-				sub.name
-			),
-			SubscriptionBillingError,
-		)
-	if not get_settings().credit_note_on_cancellation:
-		frappe.throw(
-			_("Credit Note On Cancellation is disabled in Subscription Settings."), SubscriptionBillingError
-		)
-
-	cancel_date = getdate(cancel_date)
-	posting_date = getdate(posting_date) if posting_date else None
-
-	try:
-		with filelock(party_lock_name(sub.company, sub.party_type, sub.party), timeout=60):
-			credit_notes = _issue_credit_notes(sub, cancel_date, posting_date)
-			sub.status = "Cancelled"
-			sub.cancelation_date = cancel_date
-			sub.save()
-	except LockTimeoutError as e:
-		raise ConsolidationLocked(_("Billing for {0} is running elsewhere").format(sub.party)) from e
-
-	return {
-		"subscription": sub.name,
-		"credit_notes": [cn.name for cn in credit_notes],
-		"credited": flt(sum(-cn.grand_total for cn in credit_notes), 2),
-	}
 
 
 def billed_lines(subscription: str) -> list[frappe._dict]:
@@ -148,35 +102,6 @@ def existing_returns(invoice: str, row_names: list[str]) -> list[frappe._dict]:
 			& (sii.sales_invoice_item.isin(row_names))
 		)
 	).run(as_dict=True)
-
-
-def _issue_credit_notes(sub, cancel_date, posting_date) -> list:
-	lines = [row for row in billed_lines(sub.name) if row.pend and getdate(row.pend) >= cancel_date]
-	for row in lines:
-		if not row.pstart:
-			frappe.throw(
-				_("Row {0} of {1} carries no service period; issue that credit note manually.").format(
-					row.idx, row.invoice
-				),
-				SubscriptionBillingError,
-			)
-
-	by_invoice: dict[str, list[frappe._dict]] = {}
-	for row in lines:
-		row.factor, row.unused_days, row.total_days = unused_factor(row.pstart, row.pend, cancel_date)
-		if row.factor > 0:
-			by_invoice.setdefault(row.invoice, []).append(row)
-
-	credit_notes = []
-	for invoice, rows in by_invoice.items():
-		cn = _build_credit_note(sub, invoice, rows, cancel_date, posting_date)
-		if cn is None:
-			continue
-		cn.flags.ignore_mandatory = True
-		cn.insert()
-		cn.submit()
-		credit_notes.append(cn)
-	return credit_notes
 
 
 def _guard_double_refund(invoice: str, rows: list[frappe._dict]) -> None:
@@ -267,3 +192,81 @@ def _build_credit_note(sub, invoice: str, rows: list[frappe._dict], cancel_date,
 	if not flt(cn.grand_total):
 		return None
 	return cn
+
+
+def _issue_credit_notes(sub, cancel_date, posting_date) -> list:
+	lines = [row for row in billed_lines(sub.name) if row.pend and getdate(row.pend) >= cancel_date]
+	for row in lines:
+		if not row.pstart:
+			frappe.throw(
+				_("Row {0} of {1} carries no service period; issue that credit note manually.").format(
+					row.idx, row.invoice
+				),
+				SubscriptionBillingError,
+			)
+
+	by_invoice: dict[str, list[frappe._dict]] = {}
+	for row in lines:
+		row.factor, row.unused_days, row.total_days = unused_factor(row.pstart, row.pend, cancel_date)
+		if row.factor > 0:
+			by_invoice.setdefault(row.invoice, []).append(row)
+
+	credit_notes = []
+	for invoice, rows in by_invoice.items():
+		cn = _build_credit_note(sub, invoice, rows, cancel_date, posting_date)
+		if cn is None:
+			continue
+		cn.flags.ignore_mandatory = True
+		cn.insert()
+		cn.submit()
+		credit_notes.append(cn)
+	return credit_notes
+
+
+@frappe.whitelist()
+def cancel_with_credit_note(subscription: str, cancel_date=None, posting_date=None) -> dict:
+	"""Cancel `subscription` effective `cancel_date` (default today) and credit the unused service.
+
+	`posting_date` is only for a cancel date that falls in a frozen or closed period: the credit notes are
+	posted on it while the credited window is still computed from `cancel_date`.
+	Returns {"subscription", "credit_notes": [names], "credited": total credited (positive)}."""
+	sub = frappe.get_doc("Subscription", subscription)
+	frappe.has_permission("Subscription", "write", doc=sub, throw=True)
+	frappe.has_permission("Sales Invoice", "submit", throw=True)
+
+	if sub.status == "Cancelled":
+		frappe.throw(_("subscription is already cancelled."), InvoiceCancelled)
+	if sub.party_type != "Customer":
+		frappe.throw(
+			_("Credit notes on cancellation are only supported for Customer subscriptions."),
+			SubscriptionBillingError,
+		)
+	if sub.generate_invoice_at == "End of the current subscription period":
+		frappe.throw(
+			_("{0} is billed in arrears; nothing is prepaid. Use Cancel Subscription instead.").format(
+				sub.name
+			),
+			SubscriptionBillingError,
+		)
+	if not get_settings().credit_note_on_cancellation:
+		frappe.throw(
+			_("Credit Note On Cancellation is disabled in Subscription Settings."), SubscriptionBillingError
+		)
+
+	cancel_date = getdate(cancel_date)
+	posting_date = getdate(posting_date) if posting_date else None
+
+	try:
+		with filelock(party_lock_name(sub.company, sub.party_type, sub.party), timeout=60):
+			credit_notes = _issue_credit_notes(sub, cancel_date, posting_date)
+			sub.status = "Cancelled"
+			sub.cancelation_date = cancel_date
+			sub.save()
+	except LockTimeoutError as e:
+		raise ConsolidationLocked(_("Billing for {0} is running elsewhere").format(sub.party)) from e
+
+	return {
+		"subscription": sub.name,
+		"credit_notes": [cn.name for cn in credit_notes],
+		"credited": flt(sum(-cn.grand_total for cn in credit_notes), 2),
+	}
