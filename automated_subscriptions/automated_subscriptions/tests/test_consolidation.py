@@ -490,7 +490,9 @@ class TestConsolidation(IntegrationTestCase):
 			frappe.get_doc(
 				{"doctype": "Process Subscription", "posting_date": self.today, "customer": CUSTOMER}
 			).submit()
-		enqueue.assert_not_called()  # the customer path is synchronous
+			self.assertEqual(invoices_for(CUSTOMER), [])  # nothing runs inside the submit's transaction
+			frappe.db.after_commit.run()  # what the request's own commit does next
+		enqueue.assert_not_called()  # the customer path runs in the request, not in a job
 
 		invoice = self.single_invoice()
 		self.assertEqual([d.subscription for d in invoice.items], [a.name, b.name])
@@ -834,24 +836,36 @@ class TestConsolidation(IntegrationTestCase):
 			frappe.db.set_value("Customer", CUSTOMER, "default_currency", None)
 			frappe.defaults.clear_default("company", parent="__default")
 
-	# ---- review round: Process Subscription persists itself before core's process_all can roll back
-	def test_process_subscription_commits_before_process_all(self):
+	# ---- review round: Process Subscription is committed before core's process_all can roll back
+	def test_process_subscription_runs_after_its_commit(self):
+		a = self.make_sub(identifier="a")
+		b = self.make_sub(identifier="b")
+		target = "automated_subscriptions.automated_subscriptions.custom.process_subscription.process_all"
+		with patch(target) as process_all_mock:
+			doc = frappe.get_doc(
+				{"doctype": "Process Subscription", "posting_date": self.today, "customer": CUSTOMER}
+			)
+			doc.submit()
+			process_all_mock.assert_not_called()  # a rollback in there must not reach this document
+			self.assertEqual(frappe.db.get_value("Process Subscription", doc.name, "docstatus"), 1)
+			frappe.db.after_commit.run()
+		process_all_mock.assert_called_once()
+		names, posting_date = process_all_mock.call_args.args
+		self.assertEqual(names, [a.name, b.name])
+		self.assert_date(posting_date, self.today)
+
+	def test_process_subscription_logs_an_unexpected_failure(self):
 		self.make_sub(identifier="a")
-		order = []
-		with (
-			patch.object(frappe, "in_test", False),
-			patch.object(frappe.db, "commit", side_effect=lambda *a, **k: order.append("commit")),
-			patch(
-				"automated_subscriptions.automated_subscriptions.custom.process_subscription.process_all",
-				side_effect=lambda *a, **k: order.append("process_all"),
-			),
-			patch("frappe.enqueue"),
-		):
+		title = "Process Subscription (customer) failed"
+		before = error_log_count(title)
+		target = "automated_subscriptions.automated_subscriptions.custom.process_subscription.process_all"
+		with full_rollbacks_suppressed() as rollback, patch(target, side_effect=RuntimeError("redis down")):
 			frappe.get_doc(
 				{"doctype": "Process Subscription", "posting_date": self.today, "customer": CUSTOMER}
 			).submit()
-		self.assertIn("process_all", order)
-		self.assertEqual(order[order.index("process_all") - 1], "commit")
+			frappe.db.after_commit.run()  # raising here would escape the request as a bare server error
+		rollback.assert_called_with()  # the half-done run is rolled back before the log is written
+		self.assertEqual(error_log_count(title), before + 1)
 
 	# ---- review round: a failure after the savepoint was released is still a ConsolidatedBillingError
 	def test_late_failure_after_release_is_reported(self):
@@ -1157,6 +1171,7 @@ class TestConsolidation(IntegrationTestCase):
 					"customer": customer,
 				}
 			).submit()
+			frappe.db.after_commit.run()  # what the request's own commit does next
 
 	def test_process_subscription_resubmit_bills_next_period(self):
 		start, today = "2026-01-01", "2026-02-15"  # 45 days behind, pinned like test 5
