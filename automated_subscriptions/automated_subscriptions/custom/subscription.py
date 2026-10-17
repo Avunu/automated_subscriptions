@@ -9,7 +9,7 @@ from erpnext import get_default_company
 from erpnext.accounts.doctype.accounting_dimension.accounting_dimension import get_accounting_dimensions
 from erpnext.accounts.doctype.subscription.subscription import Subscription as BaseSubscription
 from erpnext.accounts.doctype.subscription.subscription import is_prorate
-from erpnext.accounts.doctype.subscription_plan.subscription_plan import get_plan_rate
+from erpnext.accounts.doctype.subscription_plan.subscription_plan import SubscriptionPlan, get_plan_rate
 from frappe import _
 from frappe.model.meta import get_field_precision
 from frappe.query_builder.functions import Max, Min
@@ -44,8 +44,6 @@ from automated_subscriptions.automated_subscriptions.billing.runner import (
 from automated_subscriptions.automated_subscriptions.billing.settings import get_settings
 
 if TYPE_CHECKING:
-	from erpnext.accounts.doctype.subscription_plan.subscription_plan import SubscriptionPlan
-
 	from automated_subscriptions.automated_subscriptions.custom.sales_invoice import AutoSubSalesInvoice
 
 
@@ -235,7 +233,7 @@ class AutoSubSubscription(BaseSubscription):
 		precision = get_field_precision(frappe.get_meta("Sales Invoice Item").get_field("rate"))
 		items = []
 		for plan in plans:
-			plan_doc = cast("SubscriptionPlan", frappe.get_doc("Subscription Plan", plan.plan))
+			plan_doc = cast(SubscriptionPlan, frappe.get_doc("Subscription Plan", plan.plan))
 			grid, units, pct = self._resolve_grid_for_plan(
 				profile, plan_doc, settings.annual_discount_percentage
 			)
