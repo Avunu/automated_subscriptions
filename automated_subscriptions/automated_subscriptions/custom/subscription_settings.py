@@ -1,3 +1,6 @@
+# Copyright (c) 2026, Avunu LLC and contributors
+# For license information, please see license.txt
+
 from erpnext.accounts.doctype.subscription_settings.subscription_settings import (
 	SubscriptionSettings as BaseSubscriptionSettings,
 )

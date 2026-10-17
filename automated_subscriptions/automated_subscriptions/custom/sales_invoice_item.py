@@ -1,3 +1,6 @@
+# Copyright (c) 2026, Avunu LLC and contributors
+# For license information, please see license.txt
+
 from erpnext.accounts.doctype.sales_invoice_item.sales_invoice_item import (
 	SalesInvoiceItem as BaseSalesInvoiceItem,
 )

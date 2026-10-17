@@ -49,13 +49,13 @@ No other setup is needed for the Payment Request behaviour.
 
 The app adds an **Automated Subscriptions** section to Subscription Settings:
 
-| Field                          | Default        | Effect                                                                                                                                                                  |
-| ------------------------------ | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Auto-charge Max Lateness       | 30 days        | A subscription invoice whose due date is more than this many days in the past is not charged; its Payment Request is left as a draft for review.                        |
-| Annual Discount Percentage     | 16.67          | Discount used when a monthly-priced plan is billed on a yearly term: yearly rate = monthly rate x 12 x (1 - discount).                                                  |
-| Credit Note On Cancellation    | on             | On mid-term cancellation of an anchored or consolidated subscription, issue a Credit Note for the unused part of the current period.                                    |
-| Mid-term Billing Mode          | Immediate      | For anchored or consolidated subscriptions added mid-term: bill the prorated first invoice as soon as the subscription is created (Immediate), or leave it to the next daily run (Next Daily Run). |
-| Auto-billing Delay             | 0              | Present for historical reasons; the current code does not read it.                                                                                                      |
+| Field                       | Default   | Effect                                                                                                                                                                                             |
+| --------------------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Auto-charge Max Lateness    | 30 days   | A subscription invoice whose due date is more than this many days in the past is not charged; its Payment Request is left as a draft for review.                                                   |
+| Annual Discount Percentage  | 16.67     | Discount used when a monthly-priced plan is billed on a yearly term: yearly rate = monthly rate x 12 x (1 - discount).                                                                             |
+| Credit Note On Cancellation | on        | On mid-term cancellation of an anchored or consolidated subscription, issue a Credit Note for the unused part of the current period.                                                               |
+| Mid-term Billing Mode       | Immediate | For anchored or consolidated subscriptions added mid-term: bill the prorated first invoice as soon as the subscription is created (Immediate), or leave it to the next daily run (Next Daily Run). |
+| Auto-billing Delay          | 0         | Present for historical reasons; the current code does not read it.                                                                                                                                 |
 
 Defaults are written to the database on install and on every `bench migrate`, so the form and the engine always
 see the same values.
@@ -65,12 +65,12 @@ see the same values.
 The **Subscription Billing** section on the Customer form controls the engine. All fields blank means stock
 ERPNext behaviour.
 
-| Field                               | Effect                                                                                                                                                                      |
-| ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Consolidate Subscription Invoices   | Bill every subscription of this customer that is due on the same day on one invoice. Off by default, including for existing customers.                                      |
-| Subscription Billing Anchor         | Blank: stock behaviour. **Calendar**: periods follow calendar months or years. **Anniversary**: periods follow the day (and, for yearly terms, the month) of the anchor date. |
-| Subscription Billing Anchor Date    | Required for Anniversary and cleared otherwise. Periods end the day before the date's next occurrence.                                                                      |
-| Subscription Billing Interval       | Only shown, and kept, when an anchor is set. Blank: follow each plan's own interval. **Year**: bill monthly-priced plans once a year at 12 x monthly x (1 - Annual Discount Percentage). |
+| Field                             | Effect                                                                                                                                                                                   |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Consolidate Subscription Invoices | Bill every subscription of this customer that is due on the same day on one invoice. Off by default, including for existing customers.                                                   |
+| Subscription Billing Anchor       | Blank: stock behaviour. **Calendar**: periods follow calendar months or years. **Anniversary**: periods follow the day (and, for yearly terms, the month) of the anchor date.            |
+| Subscription Billing Anchor Date  | Required for Anniversary and cleared otherwise. Periods end the day before the date's next occurrence.                                                                                   |
+| Subscription Billing Interval     | Only shown, and kept, when an anchor is set. Blank: follow each plan's own interval. **Year**: bill monthly-priced plans once a year at 12 x monthly x (1 - Annual Discount Percentage). |
 
 Subscriptions also gain a free-text **Service Identifier** (what the subscription bills: a site, a domain, a seat
 pool). It is shown in the list view, searchable, and used as the invoice line description, which is what tells

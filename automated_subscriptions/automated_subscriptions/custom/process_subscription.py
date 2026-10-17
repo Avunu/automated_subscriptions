@@ -1,3 +1,6 @@
+# Copyright (c) 2026, Avunu LLC and contributors
+# For license information, please see license.txt
+
 import frappe
 from erpnext.accounts.doctype.process_subscription.process_subscription import (
 	ProcessSubscription as BaseProcessSubscription,

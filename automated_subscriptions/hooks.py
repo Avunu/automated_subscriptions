@@ -1,3 +1,6 @@
+# Copyright (c) 2026, Avunu LLC and contributors
+# For license information, please see license.txt
+
 app_name = "automated_subscriptions"
 app_title = "Automated Subscriptions"
 app_publisher = "Avunu LLC"

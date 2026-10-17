@@ -1,0 +1,8 @@
+# zizmor configuration for the workflow-lint prek hook. frappe-nix's CI module will render and own
+# this file once it lands; until then it carries the spec's content (§2.18) by hand.
+# Every `uses:` is hash-pinned with a version comment; dependabot moves the pins.
+rules:
+  unpinned-uses:
+    config:
+      policies:
+        "*": hash-pin

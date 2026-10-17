@@ -1,3 +1,6 @@
+# Copyright (c) 2026, Avunu LLC and contributors
+# For license information, please see license.txt
+
 """The party lock primitive: site-scoped filelock, two threads, no DB access from the threads."""
 
 import contextvars

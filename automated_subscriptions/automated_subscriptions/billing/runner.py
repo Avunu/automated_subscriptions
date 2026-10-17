@@ -1,3 +1,6 @@
+# Copyright (c) 2026, Avunu LLC and contributors
+# For license information, please see license.txt
+
 """Consolidated billing runner: one Sales Invoice per (party, posting date, header profile) group.
 
 The runner is the only place a consolidating customer's subscriptions are billed. Core's daily job
@@ -132,65 +135,6 @@ def group_key(sub, run_posting_date) -> GroupKey:
 	)
 
 
-# ---- public entry points -----------------------------------------------------------------------------------
-
-
-@frappe.whitelist()
-def run_consolidated_billing(
-	posting_date=None, party=None, party_type="Customer", company=None, *, dry_run=False, lock_timeout=60.0
-) -> list[dict]:
-	"""Bill every due consolidating subscription, one invoice per group; returns one summary per group.
-
-	A group that failed is rolled back, logged and reported in its summary's `errors`; the next party is still
-	visited, including when a party's lock is busy (its memo is marked "failed"). A party-scoped call whose
-	lock is busy raises ConsolidationLocked (a ValidationError) instead: nothing was attempted and the caller
-	must not treat the party as billed."""
-	frappe.has_permission("Subscription", "write", throw=True)
-	run_posting_date = getdate(posting_date)  # getdate(None) == today
-	dry_run = bool(sbool(dry_run))
-	lock_timeout = flt(lock_timeout)
-	names = _candidate_subscriptions(party, party_type, company)
-	groups, results = _group_due(names, run_posting_date)  # scan skips are reported like group failures
-	for key, sub_names in groups:
-		try:
-			summary = _run_group(key, sub_names, run_posting_date, dry_run=dry_run, lock_timeout=lock_timeout)
-		except ConsolidatedBillingError as e:  # one party's failure must not poison the next
-			if party and isinstance(e, ConsolidationLocked):
-				# party-scoped call: nothing else to report; the memo is already "failed" so the delegating
-				# process() sees the raise instead of a silent standalone fallback
-				raise
-			results.append(
-				{
-					"company": key[0],
-					"party_type": key[1],
-					"party": key[2],
-					"posting_date": str(key[3]),
-					"invoice": None,
-					"subscriptions": list(sub_names),
-					"errors": str(e),
-				}
-			)
-			continue
-		if summary is not None:
-			results.append(summary)
-	return results
-
-
-@frappe.whitelist()
-def preview_consolidated_billing(
-	posting_date=None, party=None, party_type="Customer", company=None
-) -> list[dict]:
-	"""Dry run: the real path up to (not including) submission, then rolled back to the savepoint.
-
-	Outside tests every dry-run group ends with a full `frappe.db.rollback()` (rollback-to-savepoint keeps
-	InnoDB row locks); anything uncommitted in the caller's session before the call is discarded — commit
-	first from a console."""
-	frappe.has_permission("Subscription", "read", throw=True)
-	return run_consolidated_billing(
-		posting_date, party=party, party_type=party_type, company=company, dry_run=True
-	)
-
-
 # ---- candidate scan and grouping (outside the lock — decides which parties to visit) ----------------------
 
 
@@ -235,6 +179,16 @@ def _is_due(sub, run_posting_date) -> bool:
 	) and sub.can_generate_new_invoice(run_posting_date)
 
 
+def _log_scan_failure(name, exc) -> None:
+	with contextlib.suppress(Exception):  # logging must never replace the error being handled
+		frappe.log_error(
+			title=f"Consolidated billing scan failed: {name}",
+			message=frappe.get_traceback(with_context=True) or f"{type(exc).__name__}: {exc}",
+			reference_doctype="Subscription",
+			reference_name=name,
+		)
+
+
 def _group_due(names, run_posting_date) -> tuple[list[tuple[GroupKey, list[str]]], list[dict]]:
 	"""Bucket the due candidates by group key; a candidate that cannot even be evaluated (legacy Week/Day or
 	non-divisor plan under an anchored customer, an Anniversary customer whose date was blanked by a db write)
@@ -271,14 +225,89 @@ def _group_due(names, run_posting_date) -> tuple[list[tuple[GroupKey, list[str]]
 	return sorted(groups.items(), key=lambda item: (item[0][2], item[0][3])), errors
 
 
-def _log_scan_failure(name, exc) -> None:
+def _log_group_failure(key, exc) -> None:
 	with contextlib.suppress(Exception):  # logging must never replace the error being handled
 		frappe.log_error(
-			title=f"Consolidated billing scan failed: {name}",
+			title=f"Consolidated billing failed: {key[2]}",
 			message=frappe.get_traceback(with_context=True) or f"{type(exc).__name__}: {exc}",
-			reference_doctype="Subscription",
-			reference_name=name,
+			reference_doctype=key[1],
+			reference_name=key[2],
 		)
+
+
+# ---- finalisation and summary ------------------------------------------------------------------------------
+
+
+def _date_str(value) -> str | None:
+	return str(getdate(value)) if value else None
+
+
+def _summarise(sink, run, skipped) -> dict:
+	members = {m.name: m for m in run.members}
+	lines = []
+	for d in sink.items:
+		member = members.get(d.subscription)
+		period = member.period if member else (None, None)
+		lines.append(
+			{
+				"idx": d.idx,
+				"subscription": d.subscription,
+				"subscription_plan": d.subscription_plan,
+				"service_identifier": member.service_identifier if member else None,
+				"item_code": d.item_code,
+				"description": d.description,
+				"qty": d.qty,
+				"rate": d.rate,
+				"amount": d.amount,
+				"period_start": _date_str(d.subscription_period_start or period[0]),
+				"period_end": _date_str(d.subscription_period_end or period[1]),
+			}
+		)
+	summary = {
+		"company": sink.company,
+		"party_type": run.key[1],
+		"party": run.key[2],
+		"currency": sink.currency,
+		"posting_date": _date_str(sink.posting_date),
+		"due_date": _date_str(sink.due_date),
+		"sales_tax_template": sink.taxes_and_charges or None,
+		"invoice": None if run.dry_run else sink.name,  # the dry-run draft is rolled back
+		"subscriptions": [m.name for m in run.members],
+		"from_date": _date_str(sink.from_date),
+		"to_date": _date_str(sink.to_date),
+		"lines": lines,
+		"net_total": sink.net_total,
+		"total_taxes_and_charges": sink.total_taxes_and_charges,
+		"grand_total": sink.grand_total,
+		"rounded_total": sink.rounded_total,
+		"payment_schedule": [
+			{
+				"due_date": _date_str(row.due_date),
+				"invoice_portion": row.invoice_portion,
+				"payment_amount": row.payment_amount,
+			}
+			for row in sink.payment_schedule
+		],
+		"skipped": [{"subscription": name, "reason": reason} for name, reason in skipped],
+		"errors": None,
+	}
+	if run.dry_run:
+		summary["would_submit"] = all(m.submit_invoice for m in run.members)
+	else:
+		summary["docstatus"] = sink.docstatus
+	return summary
+
+
+def _finalize(run, skipped) -> dict:
+	sink = run.sink
+	sink.from_date = min(
+		m.period[0] for m in run.members
+	)  # from the absorbed periods, never line service dates
+	sink.to_date = max(m.period[1] for m in run.members)
+	sink.save()  # re-validate, rescale the payment schedule; from <= to holds by construction
+	if all(m.submit_invoice for m in run.members) and not run.dry_run:
+		sink.submit()  # ONE submit; on_submit hooks (Payment Request) run once
+	return _summarise(sink, run, skipped)
 
 
 # ---- one party group, inside lock + savepoint --------------------------------------------------------------
@@ -384,86 +413,60 @@ def _run_group(key, sub_names, run_posting_date, *, dry_run, lock_timeout):
 		raise ConsolidationLocked(_("Billing for {0} is running elsewhere").format(party)) from e
 
 
-def _log_group_failure(key, exc) -> None:
-	with contextlib.suppress(Exception):  # logging must never replace the error being handled
-		frappe.log_error(
-			title=f"Consolidated billing failed: {key[2]}",
-			message=frappe.get_traceback(with_context=True) or f"{type(exc).__name__}: {exc}",
-			reference_doctype=key[1],
-			reference_name=key[2],
-		)
+# ---- public entry points -----------------------------------------------------------------------------------
 
 
-# ---- finalisation and summary ------------------------------------------------------------------------------
+@frappe.whitelist()
+def run_consolidated_billing(
+	posting_date=None, party=None, party_type="Customer", company=None, *, dry_run=False, lock_timeout=60.0
+) -> list[dict]:
+	"""Bill every due consolidating subscription, one invoice per group; returns one summary per group.
+
+	A group that failed is rolled back, logged and reported in its summary's `errors`; the next party is still
+	visited, including when a party's lock is busy (its memo is marked "failed"). A party-scoped call whose
+	lock is busy raises ConsolidationLocked (a ValidationError) instead: nothing was attempted and the caller
+	must not treat the party as billed."""
+	frappe.has_permission("Subscription", "write", throw=True)
+	run_posting_date = getdate(posting_date)  # getdate(None) == today
+	dry_run = bool(sbool(dry_run))
+	lock_timeout = flt(lock_timeout)
+	names = _candidate_subscriptions(party, party_type, company)
+	groups, results = _group_due(names, run_posting_date)  # scan skips are reported like group failures
+	for key, sub_names in groups:
+		try:
+			summary = _run_group(key, sub_names, run_posting_date, dry_run=dry_run, lock_timeout=lock_timeout)
+		except ConsolidatedBillingError as e:  # one party's failure must not poison the next
+			if party and isinstance(e, ConsolidationLocked):
+				# party-scoped call: nothing else to report; the memo is already "failed" so the delegating
+				# process() sees the raise instead of a silent standalone fallback
+				raise
+			results.append(
+				{
+					"company": key[0],
+					"party_type": key[1],
+					"party": key[2],
+					"posting_date": str(key[3]),
+					"invoice": None,
+					"subscriptions": list(sub_names),
+					"errors": str(e),
+				}
+			)
+			continue
+		if summary is not None:
+			results.append(summary)
+	return results
 
 
-def _finalize(run, skipped) -> dict:
-	sink = run.sink
-	sink.from_date = min(
-		m.period[0] for m in run.members
-	)  # from the absorbed periods, never line service dates
-	sink.to_date = max(m.period[1] for m in run.members)
-	sink.save()  # re-validate, rescale the payment schedule; from <= to holds by construction
-	if all(m.submit_invoice for m in run.members) and not run.dry_run:
-		sink.submit()  # ONE submit; on_submit hooks (Payment Request) run once
-	return _summarise(sink, run, skipped)
+@frappe.whitelist()
+def preview_consolidated_billing(
+	posting_date=None, party=None, party_type="Customer", company=None
+) -> list[dict]:
+	"""Dry run: the real path up to (not including) submission, then rolled back to the savepoint.
 
-
-def _date_str(value) -> str | None:
-	return str(getdate(value)) if value else None
-
-
-def _summarise(sink, run, skipped) -> dict:
-	members = {m.name: m for m in run.members}
-	lines = []
-	for d in sink.items:
-		member = members.get(d.subscription)
-		period = member.period if member else (None, None)
-		lines.append(
-			{
-				"idx": d.idx,
-				"subscription": d.subscription,
-				"subscription_plan": d.subscription_plan,
-				"service_identifier": member.service_identifier if member else None,
-				"item_code": d.item_code,
-				"description": d.description,
-				"qty": d.qty,
-				"rate": d.rate,
-				"amount": d.amount,
-				"period_start": _date_str(d.subscription_period_start or period[0]),
-				"period_end": _date_str(d.subscription_period_end or period[1]),
-			}
-		)
-	summary = {
-		"company": sink.company,
-		"party_type": run.key[1],
-		"party": run.key[2],
-		"currency": sink.currency,
-		"posting_date": _date_str(sink.posting_date),
-		"due_date": _date_str(sink.due_date),
-		"sales_tax_template": sink.taxes_and_charges or None,
-		"invoice": None if run.dry_run else sink.name,  # the dry-run draft is rolled back
-		"subscriptions": [m.name for m in run.members],
-		"from_date": _date_str(sink.from_date),
-		"to_date": _date_str(sink.to_date),
-		"lines": lines,
-		"net_total": sink.net_total,
-		"total_taxes_and_charges": sink.total_taxes_and_charges,
-		"grand_total": sink.grand_total,
-		"rounded_total": sink.rounded_total,
-		"payment_schedule": [
-			{
-				"due_date": _date_str(row.due_date),
-				"invoice_portion": row.invoice_portion,
-				"payment_amount": row.payment_amount,
-			}
-			for row in sink.payment_schedule
-		],
-		"skipped": [{"subscription": name, "reason": reason} for name, reason in skipped],
-		"errors": None,
-	}
-	if run.dry_run:
-		summary["would_submit"] = all(m.submit_invoice for m in run.members)
-	else:
-		summary["docstatus"] = sink.docstatus
-	return summary
+	Outside tests every dry-run group ends with a full `frappe.db.rollback()` (rollback-to-savepoint keeps
+	InnoDB row locks); anything uncommitted in the caller's session before the call is discarded — commit
+	first from a console."""
+	frappe.has_permission("Subscription", "read", throw=True)
+	return run_consolidated_billing(
+		posting_date, party=party, party_type=party_type, company=company, dry_run=True
+	)

@@ -1,3 +1,6 @@
+# Copyright (c) 2026, Avunu LLC and contributors
+# For license information, please see license.txt
+
 """Shared fixtures for the automated_subscriptions test modules."""
 
 import datetime

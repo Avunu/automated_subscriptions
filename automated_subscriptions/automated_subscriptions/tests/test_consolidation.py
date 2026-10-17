@@ -1,3 +1,6 @@
+# Copyright (c) 2026, Avunu LLC and contributors
+# For license information, please see license.txt
+
 from unittest.mock import patch
 
 import filelock as filelock_lib
@@ -81,6 +84,11 @@ def rollback_savepoints_only(original):
 
 
 class TestConsolidation(IntegrationTestCase):
+	# ---- 5
+	# pinned: with start = add_months(today, -1) core's period 2 (start_date + 1 month) misses today after a
+	# shorter month (03-29..31, 05-31, 07-31, 10-31, 12-31), so from_date / current_invoice_start would not match
+	GRACE_START, GRACE_TODAY = "2026-01-10", "2026-02-10"
+
 	def setUp(self):
 		super().setUp()
 		make_plans()
@@ -298,11 +306,6 @@ class TestConsolidation(IntegrationTestCase):
 		self.assertEqual(
 			frappe.local.consolidated_billing.done, {(COMPANY, "Customer", CUSTOMER, self.today): "ok"}
 		)
-
-	# ---- 5
-	# pinned: with start = add_months(today, -1) core's period 2 (start_date + 1 month) misses today after a
-	# shorter month (03-29..31, 05-31, 07-31, 10-31, 12-31), so from_date / current_invoice_start would not match
-	GRACE_START, GRACE_TODAY = "2026-01-10", "2026-02-10"
 
 	def _grace_scenario(self):
 		"""Run 1 bills A and B standalone at GRACE_START (the pre-consolidation history every live sub has); run 2

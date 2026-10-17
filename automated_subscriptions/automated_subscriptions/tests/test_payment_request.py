@@ -1,3 +1,6 @@
+# Copyright (c) 2026, Avunu LLC and contributors
+# For license information, please see license.txt
+
 """The Payment Request raised on submit of a subscription invoice (PR 4, DECISIONS.md D-11): gateway resolved
 from the line plans, header-sub plan validation switched off, the payment-terms due date as the collection
 date, a kill switch, a staleness window that leaves a draft, and no request at all for returns."""
