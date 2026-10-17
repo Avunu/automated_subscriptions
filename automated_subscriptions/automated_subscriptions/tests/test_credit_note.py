@@ -249,8 +249,9 @@ class TestCreditNote(IntegrationTestCase):
 		self.assertEqual(as_date(sub.cancelation_date), as_date("2018-02-05"))
 
 	def test_blank_company_takes_the_runners_lock(self):
-		"""Company is optional on a Subscription; the runner bills a blank one under the default company and
-		locks that party key, so the cancellation must lock the same key to serialise with it."""
+		"""Company is optional on a Subscription; the runner bills a blank one under get_default_company(), which
+		depends on the session user. The lock is keyed on the party alone, so the cancellation takes the runner's
+		lock whatever default company either user resolves."""
 		sub = self.make_sub()
 		frappe.db.set_value("Subscription", sub.name, "company", None)
 		# the save validates the plans' currency against the party's when there is no company
@@ -264,12 +265,9 @@ class TestCreditNote(IntegrationTestCase):
 			locks.append(name)
 			return real_filelock(name, **kwargs)
 
-		with (
-			patch.object(credit_note_module, "get_default_company", return_value=COMPANY),
-			patch.object(credit_note_module, "filelock", side_effect=recording_filelock),
-		):
+		with patch.object(credit_note_module, "filelock", side_effect=recording_filelock):
 			self.cancel(sub, "2018-01-05")
-		self.assertEqual(locks, [party_lock_name(COMPANY, "Customer", CUSTOMER)])
+		self.assertEqual(locks, [party_lock_name("Customer", CUSTOMER)])
 
 	# ---- 5
 	def test_future_prepaid_line(self):

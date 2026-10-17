@@ -131,9 +131,14 @@ def _mark_done(ctx: RunContext, memo_key: MemoKey, state: str) -> None:
 # ---- lock name and group key -------------------------------------------------------------------------------
 
 
-def party_lock_name(company: str | None, party_type: str | None, party: str | None) -> str:
-	"""Site-scoped lock name; party names contain spaces, apostrophes, possibly "/" — never use them raw."""
-	digest = hashlib.sha1(f"{company}|{party_type}|{party}".encode(), usedforsecurity=False).hexdigest()[:16]
+def party_lock_name(party_type: str | None, party: str | None) -> str:
+	"""Site-scoped lock name; party names contain spaces, apostrophes, possibly "/" — never use them raw.
+
+	Keyed on the party alone, not the company: a blank stored company bills under get_default_company(), which
+	resolves the *session user's* default first, so the runner (scheduler / one desk user) and a credit-note
+	cancellation (another desk user) could derive different companies for the same subscription and never
+	serialise. Two companies billing one party now share a lock, which only costs them a short wait."""
+	digest = hashlib.sha1(f"{party_type}|{party}".encode(), usedforsecurity=False).hexdigest()[:16]
 	return f"subbill-{digest}"
 
 
@@ -358,7 +363,7 @@ def _run_group(
 	memo_key = (company, party_type, party, str(run_posting_date))
 	ctx = _run_ctx()
 	try:
-		with filelock(party_lock_name(company, party_type, party), timeout=lock_timeout):
+		with filelock(party_lock_name(party_type, party), timeout=lock_timeout):
 			if not frappe.in_test and not dry_run:
 				frappe.db.commit()  # fresh REPEATABLE-READ snapshot; nothing pending at this point
 			sp = "subbill_" + frappe.generate_hash(length=8)  # bare identifier; never derived from the party
