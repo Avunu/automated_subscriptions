@@ -78,7 +78,8 @@ ERPNext behaviour.
 Subscriptions also gain a free-text **Service Identifier** (what the subscription bills: a site, a domain, a seat
 pool). It is shown in the list view, searchable, and used as the invoice line description, which is what tells
 the lines of a consolidated invoice apart. **Process Subscription** gains an optional **Customer** field to limit a
-run to one customer.
+run to one customer. Like a run without a customer, it is queued as a background job (long queue) once the
+document is submitted.
 
 ### Kill switch
 

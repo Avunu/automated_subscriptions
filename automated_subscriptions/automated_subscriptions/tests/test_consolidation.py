@@ -30,6 +30,9 @@ from automated_subscriptions.automated_subscriptions.billing.runner import (
 	preview_consolidated_billing,
 	run_consolidated_billing,
 )
+from automated_subscriptions.automated_subscriptions.custom.process_subscription import (
+	process_customer_subscriptions,
+)
 from automated_subscriptions.automated_subscriptions.custom.subscription import (
 	AutoSubSubscription as MixinSubscription,
 )
@@ -69,6 +72,15 @@ def invoices_for(customer):
 		["name", "docstatus", "grand_total", "from_date", "to_date", "due_date", "subscription"],
 		order_by="creation asc, name asc",
 	)
+
+
+def run_customer_job(enqueue):
+	"""Run the customer job a patched frappe.enqueue was handed, as a worker would once the submit commits."""
+	calls = [c for c in enqueue.call_args_list if c.args and c.args[0] is process_customer_subscriptions]
+	assert len(calls) == 1, enqueue.call_args_list
+	kwargs = calls[0].kwargs
+	assert kwargs["enqueue_after_commit"] is True and kwargs["queue"] == "long", kwargs
+	process_customer_subscriptions(kwargs["names"], kwargs["posting_date"])
 
 
 def error_log_count(title):
@@ -465,7 +477,7 @@ class TestConsolidation(IntegrationTestCase):
 		self.make_sub(identifier="a")
 		self.make_sub(identifier="b")
 		self.assertTrue(issubclass(ConsolidationLocked, frappe.ValidationError))
-		lock_path = get_site_path("locks", party_lock_name(COMPANY, "Customer", CUSTOMER) + ".lock")
+		lock_path = get_site_path("locks", party_lock_name("Customer", CUSTOMER) + ".lock")
 		holder = filelock_lib.FileLock(lock_path, timeout=0)  # a separate object: the lock is not reentrant
 		holder.acquire()
 		try:
@@ -495,8 +507,7 @@ class TestConsolidation(IntegrationTestCase):
 				{"doctype": "Process Subscription", "posting_date": self.today, "customer": CUSTOMER}
 			).submit()
 			self.assertEqual(invoices_for(CUSTOMER), [])  # nothing runs inside the submit's transaction
-			frappe.db.after_commit.run()  # what the request's own commit does next
-		enqueue.assert_not_called()  # the customer path runs in the request, not in a job
+			run_customer_job(enqueue)  # one job, enqueued once the submit commits
 
 		invoice = self.single_invoice()
 		self.assertEqual([d.subscription for d in invoice.items], [a.name, b.name])
@@ -787,7 +798,7 @@ class TestConsolidation(IntegrationTestCase):
 		self.make_sub(identifier="a")
 		set_consolidate(CUSTOMER_2, 1)
 		self.make_sub(party=CUSTOMER_2, identifier="x")
-		lock_path = get_site_path("locks", party_lock_name(COMPANY, "Customer", CUSTOMER) + ".lock")
+		lock_path = get_site_path("locks", party_lock_name("Customer", CUSTOMER) + ".lock")
 		holder = filelock_lib.FileLock(lock_path, timeout=0)
 		holder.acquire()
 		try:
@@ -845,14 +856,14 @@ class TestConsolidation(IntegrationTestCase):
 		a = self.make_sub(identifier="a")
 		b = self.make_sub(identifier="b")
 		target = "automated_subscriptions.automated_subscriptions.custom.process_subscription.process_all"
-		with patch(target) as process_all_mock:
+		with patch(target) as process_all_mock, patch("frappe.enqueue") as enqueue:
 			doc = frappe.get_doc(
 				{"doctype": "Process Subscription", "posting_date": self.today, "customer": CUSTOMER}
 			)
 			doc.submit()
 			process_all_mock.assert_not_called()  # a rollback in there must not reach this document
 			self.assertEqual(frappe.db.get_value("Process Subscription", doc.name, "docstatus"), 1)
-			frappe.db.after_commit.run()
+			run_customer_job(enqueue)
 		process_all_mock.assert_called_once()
 		names, posting_date = process_all_mock.call_args.args
 		self.assertEqual(names, [a.name, b.name])
@@ -862,7 +873,7 @@ class TestConsolidation(IntegrationTestCase):
 		a = self.make_sub(identifier="a")
 		self.make_sub(identifier="b")
 		target = "automated_subscriptions.automated_subscriptions.custom.process_subscription.process_all"
-		with patch(target) as process_all_mock:
+		with patch(target) as process_all_mock, patch("frappe.enqueue") as enqueue:
 			frappe.get_doc(
 				{
 					"doctype": "Process Subscription",
@@ -871,7 +882,7 @@ class TestConsolidation(IntegrationTestCase):
 					"subscription": a.name,
 				}
 			).submit()
-			frappe.db.after_commit.run()
+			run_customer_job(enqueue)
 		self.assertEqual(process_all_mock.call_args.args[0], [a.name])
 
 	def test_process_subscription_logs_an_unexpected_failure(self):
@@ -879,11 +890,15 @@ class TestConsolidation(IntegrationTestCase):
 		title = "Process Subscription (customer) failed"
 		before = error_log_count(title)
 		target = "automated_subscriptions.automated_subscriptions.custom.process_subscription.process_all"
-		with full_rollbacks_suppressed() as rollback, patch(target, side_effect=RuntimeError("redis down")):
+		with (
+			full_rollbacks_suppressed() as rollback,
+			patch(target, side_effect=RuntimeError("redis down")),
+			patch("frappe.enqueue") as enqueue,
+		):
 			frappe.get_doc(
 				{"doctype": "Process Subscription", "posting_date": self.today, "customer": CUSTOMER}
 			).submit()
-			frappe.db.after_commit.run()  # raising here would escape the request as a bare server error
+			run_customer_job(enqueue)  # ends normally: one titled log instead of a failed job
 		rollback.assert_called_with()  # the half-done run is rolled back before the log is written
 		self.assertEqual(error_log_count(title), before + 1)
 
@@ -1179,7 +1194,7 @@ class TestConsolidation(IntegrationTestCase):
 	# ---- review round R2-04: one submitted Process Subscription is one run (memo cleared per document)
 	def _submit_process_subscription(self, customer=CUSTOMER, posting_date=None):
 		with (
-			patch("frappe.enqueue"),
+			patch("frappe.enqueue") as enqueue,
 			full_rollbacks_suppressed(),
 		):
 			frappe.get_doc(
@@ -1189,7 +1204,7 @@ class TestConsolidation(IntegrationTestCase):
 					"customer": customer,
 				}
 			).submit()
-			frappe.db.after_commit.run()  # what the request's own commit does next
+			run_customer_job(enqueue)
 
 	def test_process_subscription_resubmit_bills_next_period(self):
 		start, today = "2026-01-01", "2026-02-15"  # 45 days behind, pinned like test 5
