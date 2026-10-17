@@ -29,7 +29,7 @@ from automated_subscriptions.automated_subscriptions.billing.runner import (
 	run_consolidated_billing,
 )
 from automated_subscriptions.automated_subscriptions.custom.subscription import (
-	Subscription as MixinSubscription,
+	AutoSubSubscription as MixinSubscription,
 )
 from automated_subscriptions.automated_subscriptions.tests.utils import (
 	frozen_today,

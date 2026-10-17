@@ -33,7 +33,7 @@ def process_customer_subscriptions(names: list[str], posting_date: str | None) -
 		frappe.log_error(title="Process Subscription (customer) failed")
 
 
-class ProcessSubscription(BaseProcessSubscription):
+class AutoSubProcessSubscription(BaseProcessSubscription):
 	"""Extension registered via extend_doctype_class: honours the `customer` custom field.
 
 	Without a customer the stock fan-out runs (every non-cancelled subscription, enqueued in batches of 500).

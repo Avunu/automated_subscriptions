@@ -57,7 +57,7 @@ def refresh_subscriptions_on_cancel(doc: BaseSalesInvoice, method=None):
 	doc.refresh_subscription_status()
 
 
-class SalesInvoice(BaseSalesInvoice):
+class AutoSubSalesInvoice(BaseSalesInvoice):
 	"""Mixin registered via extend_doctype_class.
 
 	Core Subscription.create_invoice calls invoice.set_missing_values() *before* invoice.save(), and that

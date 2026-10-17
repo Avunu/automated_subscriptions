@@ -8,6 +8,9 @@ from frappe.types import DF
 
 
 class SubscriptionSettings(BaseSubscriptionSettings):
+	"""Typing shell only; not registered in hooks (it adds no behaviour). Read the values through
+	billing/settings.py get_settings, which applies the field defaults."""
+
 	annual_discount_percentage: DF.Percent
 	auto_billing_delay: DF.Int
 	auto_charge_max_lateness_days: DF.Int

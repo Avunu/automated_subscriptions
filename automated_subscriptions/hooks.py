@@ -27,9 +27,9 @@ doc_events = {
 		"on_cancel": "automated_subscriptions.automated_subscriptions.custom.sales_invoice.refresh_subscriptions_on_cancel",
 	},
 }
+# custom/subscription_settings.py and custom/sales_invoice_item.py only declare custom-field types: not registered
 extend_doctype_class = {
-	"Process Subscription": "automated_subscriptions.automated_subscriptions.custom.process_subscription.ProcessSubscription",
-	"Sales Invoice": "automated_subscriptions.automated_subscriptions.custom.sales_invoice.SalesInvoice",
-	"Subscription": "automated_subscriptions.automated_subscriptions.custom.subscription.Subscription",
-	"Subscription Settings": "automated_subscriptions.automated_subscriptions.custom.subscription_settings.SubscriptionSettings",
+	"Process Subscription": "automated_subscriptions.automated_subscriptions.custom.process_subscription.AutoSubProcessSubscription",
+	"Sales Invoice": "automated_subscriptions.automated_subscriptions.custom.sales_invoice.AutoSubSalesInvoice",
+	"Subscription": "automated_subscriptions.automated_subscriptions.custom.subscription.AutoSubSubscription",
 }

@@ -120,7 +120,7 @@ def _date_key(value):
 	return getdate(value) if value else getdate("1900-01-01")
 
 
-class Subscription(BaseSubscription):
+class AutoSubSubscription(BaseSubscription):
 	"""Mixin registered via extend_doctype_class; must derive from core Subscription directly.
 
 	Annotations only, never assignments (a class attribute would shadow document values).
