@@ -33,10 +33,6 @@ siblings = ["erpnext", "payments"]
 [tool.frappe-nix.dev-shell]
 frappe-nix-url = "github:Avunu/frappe-nix/e95f67f97de1322c89df9ffbc9218c31d4ca83ba"
 
-[tool.ssort]
-# Skip sorting within TYPE_CHECKING blocks
-skip = ["TYPE_CHECKING"]
-
 [tool.ruff]
 line-length = 110
 target-version = "py314"
