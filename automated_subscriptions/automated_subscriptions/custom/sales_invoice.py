@@ -164,7 +164,10 @@ def subscription_payment_request(doc: BaseSalesInvoice, method=None):
 	pr.is_a_subscription = 0
 	pr.set("subscription_plans", [])
 	due_date = getdate(doc.due_date or doc.posting_date)
-	pr.transaction_date = due_date  # the payment-terms due date is the collection date
+	# the payment-terms due date is the collection date. An ISO string, not a date: stock payments' GoCardless
+	# compares it with the mandate's next_possible_charge_date (a string from the API) via max(), and a date there
+	# raises TypeError, which payment_gateway_validation swallows into False: no charge and no email
+	pr.transaction_date = due_date.isoformat()
 	pr.save(ignore_permissions=True)
 	max_lateness = cint(get_settings().auto_charge_max_lateness_days)
 	if due_date < getdate(add_days(nowdate(), -max_lateness)):

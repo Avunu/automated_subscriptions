@@ -18,6 +18,7 @@ from erpnext.accounts.doctype.subscription.test_subscription import (
 )
 from frappe.tests import IntegrationTestCase
 from frappe.utils import add_days, getdate, nowdate
+from payments.payment_gateways.doctype.gocardless_settings.gocardless_settings import GoCardlessSettings
 
 from automated_subscriptions.automated_subscriptions.tests.utils import make_payment_terms_template
 
@@ -286,3 +287,32 @@ class TestPaymentRequest(IntegrationTestCase):
 		validation.assert_not_called()
 		self.assertEqual(invoice.docstatus, 1)
 		self.assertEqual(payment_requests_for(invoice), [])
+
+	# ---- (j)
+	def test_stock_gocardless_charges_on_the_due_date(self):
+		"""Stock payments' GoCardless charges on max(transaction_date, the mandate's next_possible_charge_date), and
+		the API returns that date as a string. A datetime.date transaction_date made max() raise TypeError, which
+		payment_gateway_validation turns into False ("handled"): a mandate customer was neither charged nor emailed.
+		The mandate lookup (an API call) and the charge itself are stubbed at their entry points."""
+		controller = frappe.new_doc("GoCardless Settings")
+		next_possible = add_days(self.today, 3)  # before the NET15 due date, so the due date wins
+		with (
+			patch(
+				"erpnext.accounts.doctype.payment_request.payment_request._get_payment_gateway_controller",
+				return_value=controller,
+			),
+			patch.object(
+				GoCardlessSettings,
+				"check_mandate_validity",
+				return_value=({"mandate": "MD000AUTOSUBTEST"}, next_possible),
+			),
+			patch.object(GoCardlessSettings, "create_payment_request") as charge,
+		):
+			invoice = self.make_invoice()
+		pr = self.single_request(invoice)
+		self.assertEqual(pr.docstatus, 1)
+		self.assertEqual(pr.mute_email, 1)  # the mandate was charged: nothing to email
+		charge.assert_called()
+		data = charge.call_args.args[0]
+		self.assertEqual(data["mandate"], "MD000AUTOSUBTEST")
+		self.assertEqual(data["charge_date"], str(getdate(invoice.due_date)))
