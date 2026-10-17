@@ -73,7 +73,7 @@ class AutoSubSalesInvoice(BaseSalesInvoice):
 	# (sales_invoice.js set_pos_data); is_whitelisted checks the resolved function object, so the override
 	# must re-declare it or every POS toggle fails with PermissionError
 	@frappe.whitelist()
-	def set_missing_values(self, for_validate=False):
+	def set_missing_values(self, for_validate: bool = False):
 		apply_subscription_billing_policy(self)
 		return super().set_missing_values(for_validate)
 

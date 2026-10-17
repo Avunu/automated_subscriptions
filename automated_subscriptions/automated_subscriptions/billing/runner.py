@@ -460,7 +460,13 @@ def _run_group(
 
 @frappe.whitelist()
 def run_consolidated_billing(
-	posting_date=None, party=None, party_type="Customer", company=None, *, dry_run=False, lock_timeout=60.0
+	posting_date: DateTimeLikeObject | None = None,
+	party: str | None = None,
+	party_type: str | None = "Customer",
+	company: str | None = None,
+	*,
+	dry_run: bool | int | str = False,  # str: a form or query-string flag ("1", "true"), read by sbool
+	lock_timeout: float | int | str = 60.0,
 ) -> list[dict]:
 	"""Bill every due consolidating subscription, one invoice per group; returns one summary per group.
 
@@ -501,7 +507,10 @@ def run_consolidated_billing(
 
 @frappe.whitelist()
 def preview_consolidated_billing(
-	posting_date=None, party=None, party_type="Customer", company=None
+	posting_date: DateTimeLikeObject | None = None,
+	party: str | None = None,
+	party_type: str | None = "Customer",
+	company: str | None = None,
 ) -> list[dict]:
 	"""Dry run: the real path up to (not including) submission, then rolled back to the savepoint.
 
