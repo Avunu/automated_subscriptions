@@ -21,7 +21,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-    uses: Avunu/frappe-nix/.github/workflows/app-lint.yml@a216ce95ce051fe0bc5b95f112fcb85529910ede # v0.0.0
+    uses: Avunu/frappe-nix/.github/workflows/app-lint.yml@bb8969c873a8b13d342f45cbeb1272cc55ce6799 # v1.0.0
     with:
       app: automated_subscriptions
       integration-branch: develop
@@ -32,7 +32,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-    uses: Avunu/frappe-nix/.github/workflows/app-test.yml@a216ce95ce051fe0bc5b95f112fcb85529910ede # v0.0.0
+    uses: Avunu/frappe-nix/.github/workflows/app-test.yml@bb8969c873a8b13d342f45cbeb1272cc55ce6799 # v1.0.0
     with:
       app: automated_subscriptions
       integration-branch: develop
@@ -47,7 +47,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-    uses: Avunu/frappe-nix/.github/workflows/app-marketplace.yml@a216ce95ce051fe0bc5b95f112fcb85529910ede # v0.0.0
+    uses: Avunu/frappe-nix/.github/workflows/app-marketplace.yml@bb8969c873a8b13d342f45cbeb1272cc55ce6799 # v1.0.0
     with:
       app: automated_subscriptions
       integration-branch: develop
