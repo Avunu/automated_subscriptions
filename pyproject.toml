@@ -28,9 +28,6 @@ profile = "github:Avunu/frappe-standards-profile/main"
 frappe-major = 16
 siblings = ["erpnext", "payments"]
 
-[tool.frappe-nix.dev-shell]
-frappe-nix-url = "github:Avunu/frappe-nix/a216ce95ce051fe0bc5b95f112fcb85529910ede"
-
 [tool.ruff]
 line-length = 110
 target-version = "py314"

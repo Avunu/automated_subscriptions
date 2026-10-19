@@ -4,7 +4,7 @@
   description = "automated_subscriptions: Automated Subscriptions";
 
   inputs = {
-    frappe-nix.url = "github:Avunu/frappe-nix/a216ce95ce051fe0bc5b95f112fcb85529910ede";
+    frappe-nix.url = "github:Avunu/frappe-nix/release-1";
     nixpkgs.follows = "frappe-nix/nixpkgs";
     frappe = {
       url = "github:frappe/frappe/version-16";
@@ -46,7 +46,6 @@
         systems = [
           "aarch64-darwin"
           "aarch64-linux"
-          "x86_64-darwin"
           "x86_64-linux"
         ];
 
@@ -56,7 +55,7 @@
             formatter = pkgs.nixfmt;
             frappe-nix = {
               enable = true;
-              siteName = "automated-subscriptions.localhost";
+              defaultSite = "automated-subscriptions.localhost";
               app = {
                 enable = true;
                 frappeVersion = "version-16";
