@@ -1,0 +1,10 @@
+# The app's registry listing (docs/app-standards/marketplace.md); frappe-listing check validates it.
+schema = 1
+title = "Automated Subscriptions"
+tagline = "Subscription auto-billing for ERPNext: payment requests, anchors and proration"
+type = "extension"
+category = "Extensions"
+categories = ["Accounting", "Billing", "Payments"]
+website = "https://avunu.net/open-source/automated_subscriptions/"
+documentation = "https://docs.avunu.net/automated-subscriptions/"
+apps_screen = false

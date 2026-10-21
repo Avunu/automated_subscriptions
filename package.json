@@ -2,7 +2,7 @@
 	"name": "automated-subscriptions",
 	"version": "0.0.1",
 	"private": true,
-	"description": "Auto-billing with ERPNext Subscriptions using Frappe Payments",
+	"description": "Subscription auto-billing for ERPNext: payment requests, anchors and proration",
 	"license": "MIT",
 	"author": "Avunu LLC",
 	"type": "module",
@@ -10,13 +10,17 @@
 		"format": "oxfmt",
 		"format:check": "oxfmt --check",
 		"lint": "oxlint",
+		"typecheck": "tsc --build tsconfig.json",
 		"lint:py": "uv run --frozen --project tools ruff check . && uv run --frozen --project tools ruff format --check .",
 		"typecheck:py": "uv run --frozen --project tools ty check --python \"${FRAPPE_BENCH_ROOT:-.frappe-nix/bench}/env\"",
-		"check": "yarn -s format:check && yarn -s lint"
+		"check": "yarn -s format:check && yarn -s lint && yarn -s typecheck"
 	},
 	"devDependencies": {
+		"@types/node": "^26.6.4",
+		"frappe-types": "^16.5.0",
 		"oxfmt": "^0.73.0",
-		"oxlint": "^1.87.0"
+		"oxlint": "^1.87.0",
+		"typescript": "^7.0.2"
 	},
 	"engines": {
 		"node": ">=24"
