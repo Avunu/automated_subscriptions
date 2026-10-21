@@ -26,17 +26,17 @@ context that keeps the test's transaction through code that answers an error wit
 
 ## Source layout
 
-| Path                                              | What                                                                                       |
-| ------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| `automated_subscriptions/hooks.py`                | Doc events on Customer and Sales Invoice, the `extend_doctype_class` mixins, install hooks  |
-| `automated_subscriptions/install.py`              | `after_install`: the index on `Sales Invoice.subscription`                                 |
-| `automated_subscriptions/automated_subscriptions/custom/` | The custom fields (`*.json`) and the Subscription, Sales Invoice, Customer and Process Subscription extensions |
-| `automated_subscriptions/automated_subscriptions/billing/anchor.py`   | Period ends and proration factors for calendar and anniversary anchors |
-| `automated_subscriptions/automated_subscriptions/billing/profile.py`  | A customer's billing profile (anchor, interval, consolidation)         |
-| `automated_subscriptions/automated_subscriptions/billing/runner.py`   | The consolidated billing runner and its dry run                         |
-| `automated_subscriptions/automated_subscriptions/billing/credit_note.py` | Credit notes on cancellation                                         |
-| `automated_subscriptions/automated_subscriptions/billing/settings.py` | Subscription Settings with defaults, and the defaults written on migrate |
-| `automated_subscriptions/demo.py`                 | Demo data for `frappe-demo` and the screenshots                                            |
+| Path                                                                     | What                                                                                                           |
+| ------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------- |
+| `automated_subscriptions/hooks.py`                                       | Doc events on Customer and Sales Invoice, the `extend_doctype_class` mixins, install hooks                     |
+| `automated_subscriptions/install.py`                                     | `after_install`: the index on `Sales Invoice.subscription`                                                     |
+| `automated_subscriptions/automated_subscriptions/custom/`                | The custom fields (`*.json`) and the Subscription, Sales Invoice, Customer and Process Subscription extensions |
+| `automated_subscriptions/automated_subscriptions/billing/anchor.py`      | Period ends and proration factors for calendar and anniversary anchors                                         |
+| `automated_subscriptions/automated_subscriptions/billing/profile.py`     | A customer's billing profile (anchor, interval, consolidation)                                                 |
+| `automated_subscriptions/automated_subscriptions/billing/runner.py`      | The consolidated billing runner and its dry run                                                                |
+| `automated_subscriptions/automated_subscriptions/billing/credit_note.py` | Credit notes on cancellation                                                                                   |
+| `automated_subscriptions/automated_subscriptions/billing/settings.py`    | Subscription Settings with defaults, and the defaults written on migrate                                       |
+| `automated_subscriptions/demo.py`                                        | Demo data for `frappe-demo` and the screenshots                                                                |
 
 ## Demo and screenshots
 
