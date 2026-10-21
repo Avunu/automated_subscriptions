@@ -42,7 +42,7 @@
 	{
 		"name": "invoice-line",
 		"theme": "dark",
-		"alt": "An invoice line opened: the service identifier as its description, and the subscription, plan and period it bills",
+		"alt": "An invoice line opened: the subscription, the plan and the exact period the line bills",
 		"featured": true,
 		"readme": "feature",
 		"width": 2880,
@@ -52,7 +52,7 @@
 	{
 		"name": "invoice-line",
 		"theme": "light",
-		"alt": "An invoice line opened: the service identifier as its description, and the subscription, plan and period it bills",
+		"alt": "An invoice line opened: the subscription, the plan and the exact period the line bills",
 		"featured": true,
 		"readme": "feature",
 		"width": 2880,
@@ -67,7 +67,7 @@
 		"readme": "feature",
 		"width": 2880,
 		"height": 1800,
-		"sha256": "86c77c0337850ef14ecd6b2de09d7b716f6da44f6e55e32cce9444d54ac33911"
+		"sha256": "7aefeebbd9638e8b88d5e1fc92a53e1cf9999f32c3a560dcb63447a2026ddee5"
 	},
 	{
 		"name": "subscription-settings",
@@ -77,7 +77,7 @@
 		"readme": "feature",
 		"width": 2880,
 		"height": 1800,
-		"sha256": "fc18c530fa803cb140503a75d9dde405244871816cf10f98b440210fa14c6de4"
+		"sha256": "d5ef84dd2420d9d30b24faa9cee929875d0d24637f3d81445fd04a6c221438d9"
 	},
 	{
 		"name": "subscriptions",
