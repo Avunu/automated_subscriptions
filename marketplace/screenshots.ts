@@ -11,9 +11,17 @@ const CUSTOMER = "Riverbend Dental Group";
 const formReady = (doctype: string, name: string) =>
 	`window.cur_frm && cur_frm.doctype === ${JSON.stringify(doctype)} && cur_frm.doc.name === ${JSON.stringify(name)} && !!document.querySelector(".form-layout")`;
 
-// Bring a field into view the way the desk does (switching to its tab first), then let the form settle.
-const scrollTo = (field: string) => [
-	{ eval: `cur_frm.scroll_to_field(${JSON.stringify(field)}, false)` },
+// Bring a section into view the way the desk does: switch to the tab of a field in it, then scroll the
+// form's own scroller (.main-section) so the section heading sits just below the page head.
+// scroll_to_field would also highlight the field for two seconds, which the shot would catch.
+const showSection = (section: string, field: string) => [
+	{
+		eval: `(() => {
+			const tab = cur_frm.get_field(${JSON.stringify(field)}).tab;
+			if (tab && !tab.is_active()) tab.set_active();
+			frappe.utils.scroll_to($('.form-section[data-fieldname=${JSON.stringify(section)}]'), false, 15, $(".main-section"));
+		})()`,
+	},
 	{ wait: 800 },
 ];
 
@@ -53,7 +61,7 @@ export default {
 			route: `/app/customer/${encodeURIComponent(CUSTOMER)}`,
 			alt: "The Subscription Billing section of a Customer: consolidated invoices on, billing anchored to the calendar",
 			waitForFn: formReady("Customer", CUSTOMER),
-			actions: scrollTo("consolidate_subscription_invoices"),
+			actions: showSection("subscription_billing_section", "consolidate_subscription_invoices"),
 			mask: [".frappe-timestamp"],
 			readme: "feature",
 			featured: true,
@@ -63,12 +71,7 @@ export default {
 			route: "/app/subscription-settings",
 			alt: "The Automated Subscriptions section of Subscription Settings with its defaults",
 			waitForFn: formReady("Subscription Settings", "Subscription Settings"),
-			actions: [
-				{
-					eval: `document.querySelector('[data-fieldname="auto_billing_delay"]').closest(".form-section").scrollIntoView(); window.scrollBy(0, -80);`,
-				},
-				{ wait: 800 },
-			],
+			actions: showSection("sb_automated_subscriptions", "auto_billing_delay"),
 			mask: [".frappe-timestamp"],
 			readme: "feature",
 		},

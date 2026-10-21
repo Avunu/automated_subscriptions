@@ -27,7 +27,7 @@
 		"readme": "feature",
 		"width": 2880,
 		"height": 1800,
-		"sha256": "b4d6a64e74ed0614690d6d75a764b5f9883847ffd69f9ea46174e597761ef088"
+		"sha256": "e859dd52fad274d18af4b6c470398092dd675cd93031c771d5d89f1a6a055bf3"
 	},
 	{
 		"name": "customer-billing",
@@ -37,7 +37,7 @@
 		"readme": "feature",
 		"width": 2880,
 		"height": 1800,
-		"sha256": "036debd372d1a989c1f3f36dff37a2fc3f492210cca70f52ac87738ed260c77b"
+		"sha256": "efcb2dc2a1a1c53bb9c1b561fdd02edd65325719d473da142e463099c28e5c23"
 	},
 	{
 		"name": "invoice-line",
@@ -67,7 +67,7 @@
 		"readme": "feature",
 		"width": 2880,
 		"height": 1800,
-		"sha256": "7aefeebbd9638e8b88d5e1fc92a53e1cf9999f32c3a560dcb63447a2026ddee5"
+		"sha256": "ae93a81f6613f1c3bef02155b90ee5607231b94007111e999c45fa4b56c33a1a"
 	},
 	{
 		"name": "subscription-settings",
@@ -77,7 +77,7 @@
 		"readme": "feature",
 		"width": 2880,
 		"height": 1800,
-		"sha256": "d5ef84dd2420d9d30b24faa9cee929875d0d24637f3d81445fd04a6c221438d9"
+		"sha256": "a65c8e76c827d1cb191ca61ea575c687284afa9c3b25709ca4f9206f25c76426"
 	},
 	{
 		"name": "subscriptions",
