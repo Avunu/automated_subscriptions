@@ -6,7 +6,6 @@
 import datetime
 
 import frappe
-from erpnext import get_default_company
 from frappe.tests import IntegrationTestCase
 
 from automated_subscriptions import demo
@@ -18,7 +17,7 @@ class TestDemo(IntegrationTestCase):
 	def setUp(self):
 		super().setUp()
 		frappe.local.consolidated_billing = None
-		self.ctx = {"today": TODAY, "seed": 1, "company": get_default_company(), "erpnext_demo": False}
+		self.ctx = {"today": TODAY, "seed": 1, "company": "_Test Company", "erpnext_demo": False}
 
 	def tearDown(self):
 		frappe.local.consolidated_billing = None
