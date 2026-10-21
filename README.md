@@ -49,7 +49,8 @@ its fields set is billed by stock ERPNext.
   the first period prorated by calendar days. Monthly plans can be billed yearly with a discount.
 - **Consolidated invoices.** Bill every subscription of a customer that falls due on the same day on one Sales
   Invoice, one line per subscription, each line recording the plan and the exact period it bills.
-- **Credit notes on cancellation.** Cancelling a subscription that was billed in advance credits the unused days.
+- **Credit notes on cancellation.** Cancelling an anchored or consolidated subscription that was billed in advance
+  credits the unused days.
 - **Service Identifier.** A free-text field on Subscription (a site, a domain, a seat pool), shown in the list,
   searchable, and used as the invoice line description.
 - **Process Subscription per customer.** An optional Customer field limits a Process Subscription run to one
@@ -125,12 +126,12 @@ same values.
 The **Subscription Billing** section on the **Customer** form controls the engine. With every field blank the
 customer is billed by stock ERPNext.
 
-| Field                             | Effect                                                                                                                                                                        |
-| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Consolidate Subscription Invoices | Bill every subscription of this customer that is due on the same day on one invoice. Off by default, including for existing customers.                                        |
-| Subscription Billing Anchor       | Blank: stock behaviour. **Calendar**: periods follow calendar months or years. **Anniversary**: periods follow the day (and, for yearly terms, the month) of the anchor date. |
-| Subscription Billing Anchor Date  | Shown and required for Anniversary, cleared otherwise. Periods end the day before the date's next occurrence.                                                                 |
-| Subscription Billing Interval     | Shown and kept only when an anchor is set. Blank: each plan's own interval. **Year**: bill monthly plans once a year at 12 x monthly x (1 - Annual Discount Percentage).      |
+| Field                             | Effect                                                                                                                                                                                |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Consolidate Subscription Invoices | Bill every subscription of this customer that is due on the same day on one invoice. Off by default, including for existing customers.                                                |
+| Subscription Billing Anchor       | Blank: stock behaviour. **Calendar**: periods follow calendar months or years. **Anniversary**: periods follow the day (and, for yearly terms, the month) of the anchor date.         |
+| Subscription Billing Anchor Date  | Shown and required for Anniversary, cleared otherwise. Periods end the day before the date's next occurrence.                                                                         |
+| Subscription Billing Interval     | Shown and kept only when an anchor is set. Blank or **Month**: each plan's own interval. **Year**: bill monthly plans once a year at 12 x monthly x (1 - Annual Discount Percentage). |
 
 ### Kill switch
 
@@ -201,9 +202,10 @@ that has been credited already is refused rather than credited twice.
   **Follow Calendar Months** cannot be combined with an anchor. These are refused on save rather than billed wrongly.
 - A consolidated invoice needs one payment gateway. If its plans point to different gateways, no automatic charge is
   made.
-- Backdated start dates are checked for anchored and consolidating customers. A start date in a billing period that
-  has already ended is refused unless **Generate New Invoices Past Due Date** is on, and when catch-up billing is
-  left to the daily run, a start date a full billing cycle or more before the first period end is refused too. To
+- Backdated start dates are checked for anchored and consolidating customers. For an anchored customer, a start date
+  in a billing period that has already ended is refused unless **Generate New Invoices Past Due Date** is on. When
+  catch-up billing is left to the daily run (every consolidating customer, and anchored customers on **Next Daily
+  Run**), a start date a full billing cycle or more before the first period end is refused too. To
   load history, insert with `frappe.flags.in_import` set and replay the elapsed periods with Process Subscription and
   a past posting date.
 - No credit notes for subscriptions billed at the end of the period (those get ERPNext's invoice for the days

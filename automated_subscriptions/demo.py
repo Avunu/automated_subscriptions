@@ -3,9 +3,9 @@
 
 """Demo data for frappe-demo and the screenshots in docs/screenshots/.
 
-One customer on the billing engine: calendar-anchored and consolidating, with three
+One customer on the billing engine: calendar-anchored and consolidating, with four
 monthly subscriptions that start on the demo day. The consolidated runner then bills
-the three prorated first periods on one Sales Invoice, which is what the screenshots
+the four prorated first periods on one Sales Invoice, which is what the screenshots
 show. No plan has a payment gateway, so no Payment Request is made and nothing leaves
 the site.
 """
