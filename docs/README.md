@@ -1,187 +1,176 @@
 # Automated Subscriptions
 
-Auto-billing for ERPNext Subscriptions using Frappe Payments.
+Subscription auto-billing for ERPNext: payment requests, anchors and proration
 
-ERPNext's Subscription module generates a Sales Invoice every billing period, but it does not collect the money.
-For a direct-debit gateway such as GoCardless, where the customer has already signed a mandate, nothing tells the
-gateway to charge that mandate for the new invoice. This app closes that gap: every time a Sales Invoice that
-belongs to a Subscription is submitted, it raises a Payment Request for the outstanding amount and, when the
-gateway supports it, charges the customer's existing mandate straight away.
+ERPNext's Subscription module makes a Sales Invoice every billing period, but it does not collect the money. For a
+direct-debit gateway such as GoCardless, where the customer has already signed a mandate, nothing tells the gateway
+to charge that mandate for the new invoice. This app closes that gap: when a Sales Invoice that bills a Subscription
+is submitted, it raises a Payment Request for the outstanding amount and, when the gateway supports it, charges the
+customer's existing mandate straight away.
 
-The same app also contains an opt-in billing engine for businesses that sell many small recurring services to
-the same customer: calendar or anniversary billing anchors with day-accurate proration, one consolidated invoice
-per customer per due date, and credit notes for mid-term cancellations. Every engine feature is switched on per
-customer; a customer with no engine fields set is billed by stock ERPNext.
+It also has an opt-in billing engine for businesses that sell many small recurring services to the same customer:
+calendar or anniversary billing anchors with day-accurate proration, one consolidated invoice per customer per due
+date, and credit notes for mid-term cancellations. The engine is switched on per customer; a customer with none of
+its fields set is billed by stock ERPNext.
 
-## Requirements
+## What you get
 
-- Python 3.14 or newer
-- Frappe and ERPNext version 16 (developed and tested against ERPNext 16.34.2 and Frappe 16.33.1; other versions
-  are untested)
-- The [Frappe Payments](https://github.com/frappe/payments) app, with a Payment Gateway Account configured for
-  the gateway you collect through (for example GoCardless)
-
-`erpnext` and `payments` are declared in `required_apps`, so both must be present on the bench and installed on
-the site before this app.
+- **Payment Requests for subscription invoices.** Every submitted subscription invoice with an outstanding amount
+  gets a Payment Request through the gateway set on its plans. With a gateway that takes the payment itself, such as
+  GoCardless with a mandate, the request is submitted without e-mailing the customer.
+- **Safe defaults.** Credit notes and fully paid invoices are skipped, an invoice whose due date is too far in the
+  past is left as a draft Payment Request for review, and a site-level kill switch stops all automatic charging.
+- **Billing anchors.** Align a customer's subscriptions to calendar months or years, or to an anniversary date, with
+  the first period prorated by calendar days. Monthly plans can be billed yearly with a discount.
+- **Consolidated invoices.** Bill every subscription of a customer that falls due on the same day on one Sales
+  Invoice, one line per subscription, each line recording the plan and the exact period it bills.
+- **Credit notes on cancellation.** Cancelling an anchored or consolidated subscription that was billed in advance
+  credits the unused days.
+- **Service Identifier.** A free-text field on Subscription (a site, a domain, a seat pool), shown in the list,
+  searchable, and used as the invoice line description.
+- **Process Subscription per customer.** An optional Customer field limits a Process Subscription run to one
+  customer.
 
 ## Installation
 
-```sh
-bench get-app https://github.com/Avunu/automated_subscriptions
-bench --site your-site.example install-app automated_subscriptions
+```bash
+bench get-app https://github.com/Avunu/automated_subscriptions --branch develop
+bench --site <site> install-app automated_subscriptions
 ```
 
-Installation creates the custom fields described below and an index on `Sales Invoice.subscription`. Sites that
-already have the app get the index from a patch on the next `bench migrate`.
+The app needs ERPNext and the [Frappe Payments](https://github.com/frappe/payments) app (both are in
+`required_apps`, so install them on the site first) and Python 3.14 or newer. It is developed and tested against
+ERPNext 16.34.2 and Frappe 16.33.1. Installation adds the custom fields described below and an index on
+`Sales Invoice.subscription`; sites that already have the app get the index from a patch on the next
+`bench migrate`.
 
 ## Configuration
 
-### Charging a subscription invoice
+### Charging subscription invoices
 
-1. Set up the gateway in Frappe Payments, with a Payment Gateway Account.
-2. On each **Subscription Plan** that should be auto-charged, set **Payment Gateway** to that account. A plan
-   with no gateway is never charged automatically.
+1. Set up the gateway in Frappe Payments, with a **Payment Gateway Account**.
+2. On each **Subscription Plan** that should be charged automatically, set **Payment Gateway** to that account. A
+   plan with no gateway is never charged.
 3. Make sure the customer has an active mandate (or equivalent authorisation) with the gateway.
 
-No other setup is needed for the Payment Request behaviour.
+Nothing else is needed for the Payment Requests.
 
 ### Subscription Settings
 
-The app adds an **Automated Subscriptions** section to Subscription Settings:
+The app adds an **Automated Subscriptions** section to **Subscription Settings**:
 
-| Field                       | Default   | Effect                                                                                                                                                                                             |
-| --------------------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Auto-charge Max Lateness    | 30 days   | A subscription invoice whose due date is more than this many days in the past is not charged; its Payment Request is left as a draft for review.                                                   |
-| Annual Discount Percentage  | 16.67     | Discount used when a monthly-priced plan is billed on a yearly term: yearly rate = monthly rate x 12 x (1 - discount).                                                                             |
-| Credit Note On Cancellation | on        | On mid-term cancellation of an anchored or consolidated subscription, issue a Credit Note for the unused part of the current period.                                                               |
-| Mid-term Billing Mode       | Immediate | For anchored or consolidated subscriptions added mid-term: bill the prorated first invoice as soon as the subscription is created (Immediate), or leave it to the next daily run (Next Daily Run). |
-| Auto-billing Delay          | 0         | Present for historical reasons; the current code does not read it.                                                                                                                                 |
+| Field                           | Default   | Effect                                                                                                                                                                        |
+| ------------------------------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Auto-charge Max Lateness (days) | 30        | A subscription invoice whose due date is more than this many days in the past is not charged; its Payment Request is left as a draft.                                         |
+| Annual Discount Percentage      | 16.67     | Used when a monthly plan is billed on a yearly term: yearly rate = monthly rate x 12 x (1 - discount).                                                                        |
+| Credit Note On Cancellation     | on        | On mid-term cancellation of an anchored or consolidated subscription, issue a Credit Note for the unused part of the period.                                                  |
+| Mid-term Billing Mode           | Immediate | For an anchored or consolidated subscription added mid-term: bill the prorated first invoice when the subscription is created (Immediate), or leave it to the next daily run. |
+| Auto-billing Delay              | 0         | Not read by the current code (see Limitations).                                                                                                                               |
 
-Defaults are written to the database on install and on every `bench migrate`, so the form and the engine always
-see the same values.
+The defaults are written to the database on install and on every `bench migrate`, so the form and the engine see the
+same values.
 
 ### Per-customer billing engine
 
-The **Subscription Billing** section on the Customer form controls the engine. All fields blank means stock
-ERPNext behaviour.
+The **Subscription Billing** section on the **Customer** form controls the engine. With every field blank the
+customer is billed by stock ERPNext.
 
-| Field                             | Effect                                                                                                                                                                                   |
-| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Consolidate Subscription Invoices | Bill every subscription of this customer that is due on the same day on one invoice. Off by default, including for existing customers.                                                   |
-| Subscription Billing Anchor       | Blank: stock behaviour. **Calendar**: periods follow calendar months or years. **Anniversary**: periods follow the day (and, for yearly terms, the month) of the anchor date.            |
-| Subscription Billing Anchor Date  | Required for Anniversary and cleared otherwise. Periods end the day before the date's next occurrence.                                                                                   |
-| Subscription Billing Interval     | Only shown, and kept, when an anchor is set. Blank: follow each plan's own interval. **Year**: bill monthly-priced plans once a year at 12 x monthly x (1 - Annual Discount Percentage). |
-
-Subscriptions also gain a free-text **Service Identifier** (what the subscription bills: a site, a domain, a seat
-pool). It is shown in the list view, searchable, and used as the invoice line description, which is what tells
-the lines of a consolidated invoice apart. **Process Subscription** gains an optional **Customer** field to limit a
-run to one customer. Like a run without a customer, it is queued as a background job (long queue) once the
-document is submitted.
+| Field                             | Effect                                                                                                                                                                                |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Consolidate Subscription Invoices | Bill every subscription of this customer that is due on the same day on one invoice. Off by default, including for existing customers.                                                |
+| Subscription Billing Anchor       | Blank: stock behaviour. **Calendar**: periods follow calendar months or years. **Anniversary**: periods follow the day (and, for yearly terms, the month) of the anchor date.         |
+| Subscription Billing Anchor Date  | Shown and required for Anniversary, cleared otherwise. Periods end the day before the date's next occurrence.                                                                         |
+| Subscription Billing Interval     | Shown and kept only when an anchor is set. Blank or **Month**: each plan's own interval. **Year**: bill monthly plans once a year at 12 x monthly x (1 - Annual Discount Percentage). |
 
 ### Kill switch
 
 Add `"subscription_auto_charge_disabled": 1` to the site's `site_config.json` to stop automatic charging on that
-site. The setting lives in the site directory and is not restored with a database backup, which keeps a restored
-staging copy from charging live mandates.
+site. The setting lives in the site directory and is not restored with a database backup, so a restored staging
+copy does not charge live mandates.
 
 ## How it works
 
 ### Payment Requests
 
-When a Sales Invoice is submitted, the app creates a Payment Request for it if all of the following hold:
+An `on_submit` hook on Sales Invoice creates a Payment Request when all of these hold:
 
-- the invoice bills a Subscription (by its header link or by any line link);
-- it is not a return (credit note) and has an outstanding amount greater than zero;
-- the site kill switch is not set, and the site is not in the middle of a migrate, patch, install or data import;
-- exactly one payment gateway can be determined from the plans on the invoice (blank plan gateways ride along
-  with a set one; no gateway means no charge, and two different gateways are logged to the Error Log and left to
-  a person);
-- the due date is not older than the configured maximum lateness.
+- the invoice bills a Subscription, by its header link or by any line link;
+- it is not a return and its outstanding amount is greater than zero;
+- the kill switch is not set, and the site is not migrating, patching, installing or importing data;
+- exactly one payment gateway follows from the plans on the invoice (plans without a gateway ride along with one
+  that has it; no gateway means no charge; two different gateways are written to the Error Log and left to a
+  person);
+- the due date is not older than **Auto-charge Max Lateness**.
 
 The Payment Request is dated on the invoice's due date, so a late-running scheduler still charges. If the gateway
-takes the payment itself, as GoCardless does for a mandate, the Payment Request is submitted without sending an
-email; otherwise it is submitted normally and the customer is notified. An invoice that is too stale to
-auto-charge gets a draft Payment Request with an explanatory comment and an Error Log entry.
+takes the payment itself, as GoCardless does for a mandate, the request is submitted without an e-mail; otherwise it
+is submitted normally and the customer is notified. An invoice that is too old gets a draft Payment Request with a
+comment and an Error Log entry.
 
 ### Anchored billing and proration
 
-For a customer with a billing anchor, the end of each period is the day before the next anchor occurrence. A
-subscription that starts mid-term bills a first invoice for the stub, with the plan rate prorated by calendar days
-(billed days divided by days in the term; a full term is never rounded). Prorated invoices ignore Pricing Rules,
-because Pricing Rules overwrite the rate on every save and would undo the proration; move customer-specific
-pricing onto the plan before anchoring such a customer. Anniversary months and days that do not exist in a month
-(the 31st, February 29th) clamp to the last day of that month.
+For a customer with a billing anchor, each period ends the day before the next anchor date. A subscription that
+starts mid-term is billed for the stub first, at the plan rate prorated by calendar days (billed days divided by the
+days in the term; a full term is never rounded). Prorated invoices ignore Pricing Rules, which would otherwise
+overwrite the prorated rate on every save, so move customer-specific pricing onto the plan before anchoring such a
+customer. Anniversary days that do not exist in a month (the 31st, February 29th) fall on the month's last day.
 
 ### Consolidated billing
 
-For a customer that consolidates, the daily subscription job hands the customer's due subscriptions to a runner
-(`billing/runner.py`). The runner groups them by everything that ends up on the invoice header (company,
-currency, tax template, cost center, accounting dimensions, posting date, submit flag, trial state, additional
-discounts, days until due), takes a per-customer lock, bills each group on a single Sales Invoice with one line per
-subscription, and submits it once, so one invoice raises one Payment Request. Each group runs in its own
-savepoint: a failure rolls that group back, is written to the Error Log and does not stop other customers.
+For a consolidating customer, ERPNext's daily Process Subscription hands the customer's due subscriptions to the
+runner in `billing/runner.py`; there is no second scheduler job. The runner groups them by everything that ends up
+on the invoice header (company, currency, tax template, cost center, accounting dimensions, posting date, submit
+flag, trial state, additional discounts, days until due), takes a lock per customer, bills each group on one Sales
+Invoice with a line per subscription, and submits it once, so one invoice raises one Payment Request. Each group
+runs in its own savepoint: a failure rolls that group back, is written to the Error Log, and does not stop other
+customers.
 
-Each invoice line records the subscription, the plan and the exact period it bills. A dry run builds
-the real invoice and rolls it back; run it from a bench:
+A dry run builds the real invoices and rolls them back:
 
 ```sh
 bench --site your-site.example execute \
   automated_subscriptions.automated_subscriptions.billing.runner.preview_consolidated_billing
 ```
 
-`run_consolidated_billing` takes the same arguments (`posting_date`, `party`, `party_type`, `company`) and
-creates the invoices. There is deliberately no second scheduler hook: the engine runs from ERPNext's own daily
-Process Subscription.
+`run_consolidated_billing` takes the same arguments (`posting_date`, `party`, `party_type`, `company`) and creates
+the invoices.
 
 ### Cancellation with a credit note
 
-When a customer is anchored or consolidating, **Credit Note On Cancellation** is on, and the subscription is billed
-in advance, Cancel Subscription issues one Credit Note per source invoice for the unused days of every billed
-line, instead of ERPNext's arrears invoice. The cancel date is the last billed day. The credit is left as
-unallocated customer credit; the original invoice is untouched and no refund is sent to the gateway. A line that has
-already been credited is refused rather than credited twice.
+When the customer is anchored or consolidating, **Credit Note On Cancellation** is on and the subscription is billed
+in advance (any **Generate Invoice At** other than the end of the period), cancelling it issues one Credit Note per source invoice for the unused days of every
+billed line, instead of ERPNext's invoice for the days used. The cancel date is the last billed day. The credit is
+left as unallocated customer credit: the original invoice is untouched and no refund is sent to the gateway. A line
+that has been credited already is refused rather than credited twice.
 
 ## Limitations
 
-- Customer subscriptions only. Supplier-side (purchase) subscriptions are never anchored or consolidated.
-- Anchoring supports plans billed in months or years. Day and Week plans, plans using Monthly Rate price
-  determination, and monthly plans whose month count does not divide a year (when the customer is billed yearly)
-  cannot be anchored, and Follow Calendar Months cannot be combined with an anchor. The app refuses these with an
-  error on save rather than billing wrongly.
-- A consolidated invoice needs one payment gateway. If the plans on it point to different gateways, no automatic
-  charge is made.
-- Backdated start dates are validated for anchored and consolidating customers. A start date inside a billing
-  period that has already ended is rejected unless Generate New Invoices Past Due Date is enabled, and when catch-up
-  billing is left to the daily run, a start date a full billing cycle or more behind the first period end is
-  rejected as well. To load history, insert with `frappe.flags.in_import` set and replay the elapsed periods with
-  Process Subscription and a past posting date.
-- Credit notes are not issued for subscriptions billed in arrears, and gateway refunds are out of scope.
-- With the stock Frappe Payments app, GoCardless charges a mandate but does not settle the invoice: its webhooks
-  only track mandates, so the Payment Entry for a collected payment is made by hand (or by a payments build that
-  handles payment events).
-- Two lines with the same item and description cannot share one consolidated invoice unless Selling Settings allows
-  adding an item multiple times; set a Service Identifier per subscription.
+- Customer subscriptions only; supplier (purchase) subscriptions are never anchored or consolidated.
+- Anchoring supports plans billed in months or years. Day and Week plans, plans priced by Monthly Rate, and monthly
+  plans whose month count does not divide a year (when the customer is billed yearly) cannot be anchored, and
+  **Follow Calendar Months** cannot be combined with an anchor. These are refused on save rather than billed wrongly.
+- A consolidated invoice needs one payment gateway. If its plans point to different gateways, no automatic charge is
+  made.
+- Backdated start dates are checked for anchored and consolidating customers. For an anchored customer, a start date
+  in a billing period that has already ended is refused unless **Generate New Invoices Past Due Date** is on. When
+  catch-up billing is left to the daily run (every consolidating customer, and anchored customers on **Next Daily
+  Run**), a start date a full billing cycle or more before the first period end is refused too. To
+  load history, insert with `frappe.flags.in_import` set and replay the elapsed periods with Process Subscription and
+  a past posting date.
+- No credit notes for subscriptions billed at the end of the period (those get ERPNext's invoice for the days
+  used), and no gateway refunds.
+- With the stock Frappe Payments app, GoCardless charges a mandate but does not settle the invoice: its webhooks only
+  track mandates, so the Payment Entry for a collected payment is made by hand (or by a payments build that handles
+  payment events).
+- Two lines with the same item and description cannot share a consolidated invoice unless Selling Settings allows an
+  item to be added more than once; give each subscription its own Service Identifier.
+- **Auto-billing Delay** in Subscription Settings is a leftover field; changing it has no effect.
 
 ## Development
 
-The code follows the repository's `pre-commit` configuration (ruff for linting, import sorting and formatting,
-ssort for method order, tabs for indentation):
-
-```sh
-cd apps/automated_subscriptions
-pre-commit install
-pre-commit run --all-files
-```
-
-The test suite runs against a bench site with ERPNext installed:
-
-```sh
-bench --site your-test-site run-tests --app automated_subscriptions
-```
-
-Design decisions, and the verified ERPNext and Frappe behaviours that forced them, are recorded in
-[docs/DECISIONS.md](docs/DECISIONS.md).
+The tooling, the source layout, the demo and the design decisions are described in [Development](development.md) and
+[Design decisions](DECISIONS.md).
 
 ## License
 
-[MIT](license.txt) - Copyright (c) 2026 Avunu LLC
+[MIT](https://github.com/Avunu/automated_subscriptions/blob/develop/license.txt), Copyright (c) 2024–present Avunu LLC.

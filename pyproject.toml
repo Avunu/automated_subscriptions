@@ -1,7 +1,7 @@
 [project]
 name = "automated_subscriptions"
 authors = [{ name = "Avunu LLC", email = "mail@avu.nu" }]
-description = "Auto-billing with ERPNext Subscriptions using Frappe Payments"
+description = "Subscription auto-billing for ERPNext: payment requests, anchors and proration"
 requires-python = ">=3.14"
 readme = "README.md"
 license = { text = "MIT" }

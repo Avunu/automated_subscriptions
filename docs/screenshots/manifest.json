@@ -1,0 +1,102 @@
+[
+	{
+		"name": "consolidated-invoice",
+		"theme": "dark",
+		"alt": "One Sales Invoice billing four subscriptions of Riverbend Dental Group, each prorated for January 15 to 31",
+		"featured": true,
+		"readme": "hero",
+		"width": 2880,
+		"height": 1800,
+		"sha256": "9a54b90d255ad8c5abaf7b9a28b2ba2751d0c50c468e9c26523fef144dc0a526"
+	},
+	{
+		"name": "consolidated-invoice",
+		"theme": "light",
+		"alt": "One Sales Invoice billing four subscriptions of Riverbend Dental Group, each prorated for January 15 to 31",
+		"featured": true,
+		"readme": "hero",
+		"width": 2880,
+		"height": 1800,
+		"sha256": "79e19e23adc3aae5f73d86fb8784b55d3fcccf67db781ffe52169dfcb7a58d61"
+	},
+	{
+		"name": "customer-billing",
+		"theme": "dark",
+		"alt": "The Subscription Billing section of a Customer: consolidated invoices on, billing anchored to the calendar",
+		"featured": true,
+		"readme": "feature",
+		"width": 2880,
+		"height": 1800,
+		"sha256": "e859dd52fad274d18af4b6c470398092dd675cd93031c771d5d89f1a6a055bf3"
+	},
+	{
+		"name": "customer-billing",
+		"theme": "light",
+		"alt": "The Subscription Billing section of a Customer: consolidated invoices on, billing anchored to the calendar",
+		"featured": true,
+		"readme": "feature",
+		"width": 2880,
+		"height": 1800,
+		"sha256": "efcb2dc2a1a1c53bb9c1b561fdd02edd65325719d473da142e463099c28e5c23"
+	},
+	{
+		"name": "invoice-line",
+		"theme": "dark",
+		"alt": "An invoice line opened: the subscription, the plan and the exact period the line bills",
+		"featured": true,
+		"readme": "feature",
+		"width": 2880,
+		"height": 1800,
+		"sha256": "86b31e1271603d40c6cae10fc946b6cddc42fe242044668b9c9c36cabe2c2d4d"
+	},
+	{
+		"name": "invoice-line",
+		"theme": "light",
+		"alt": "An invoice line opened: the subscription, the plan and the exact period the line bills",
+		"featured": true,
+		"readme": "feature",
+		"width": 2880,
+		"height": 1800,
+		"sha256": "cae9386de145a98b03669812a55ee65116f33c1bda8ee29a91249964e05d6470"
+	},
+	{
+		"name": "subscription-settings",
+		"theme": "dark",
+		"alt": "The Automated Subscriptions section of Subscription Settings with its defaults",
+		"featured": false,
+		"readme": "feature",
+		"width": 2880,
+		"height": 1800,
+		"sha256": "ae93a81f6613f1c3bef02155b90ee5607231b94007111e999c45fa4b56c33a1a"
+	},
+	{
+		"name": "subscription-settings",
+		"theme": "light",
+		"alt": "The Automated Subscriptions section of Subscription Settings with its defaults",
+		"featured": false,
+		"readme": "feature",
+		"width": 2880,
+		"height": 1800,
+		"sha256": "a65c8e76c827d1cb191ca61ea575c687284afa9c3b25709ca4f9206f25c76426"
+	},
+	{
+		"name": "subscriptions",
+		"theme": "dark",
+		"alt": "The Subscription list with the Service Identifier column",
+		"featured": false,
+		"readme": "feature",
+		"width": 2880,
+		"height": 1800,
+		"sha256": "eb55fdcde346eacdc5b6e62228a1801aea90318cbfec3d73fa6780b0305d2989"
+	},
+	{
+		"name": "subscriptions",
+		"theme": "light",
+		"alt": "The Subscription list with the Service Identifier column",
+		"featured": false,
+		"readme": "feature",
+		"width": 2880,
+		"height": 1800,
+		"sha256": "d0122c9d67038522129289b360db9ea8bf24ae8c9238326bbae24e2e5818a40c"
+	}
+]
