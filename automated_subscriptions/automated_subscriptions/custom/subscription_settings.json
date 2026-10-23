@@ -10,20 +10,11 @@
         },
         {
             "dt": "Subscription Settings",
-            "default": 0,
-            "fieldname": "auto_billing_delay",
-            "fieldtype": "Int",
-            "insert_after": "sb_automated_subscriptions",
-            "label": "Auto-billing Delay",
-            "module": "Automated Subscriptions"
-        },
-        {
-            "dt": "Subscription Settings",
             "default": "16.67",
             "description": "Discount applied when a monthly-priced plan is billed on a yearly term: yearly rate = monthly x 12 x (1 - discount). 16.67% = two months free.",
             "fieldname": "annual_discount_percentage",
             "fieldtype": "Percent",
-            "insert_after": "auto_billing_delay",
+            "insert_after": "sb_automated_subscriptions",
             "label": "Annual Discount Percentage",
             "module": "Automated Subscriptions"
         },

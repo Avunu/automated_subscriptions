@@ -65,10 +65,13 @@ The app adds an **Automated Subscriptions** section to **Subscription Settings**
 | Annual Discount Percentage      | 16.67     | Used when a monthly plan is billed on a yearly term: yearly rate = monthly rate x 12 x (1 - discount).                                                                        |
 | Credit Note On Cancellation     | on        | On mid-term cancellation of an anchored or consolidated subscription, issue a Credit Note for the unused part of the period.                                                  |
 | Mid-term Billing Mode           | Immediate | For an anchored or consolidated subscription added mid-term: bill the prorated first invoice when the subscription is created (Immediate), or leave it to the next daily run. |
-| Auto-billing Delay              | 0         | Not read by the current code (see Limitations).                                                                                                                               |
 
 The defaults are written to the database on install and on every `bench migrate`, so the form and the engine see the
 same values.
+
+There is no separate delay setting for payments: payment timing comes from **Days Until Due** on the Subscription.
+The invoice is due that many days after its posting date (with 0, the customer's payment terms decide), and the
+Payment Request is dated on that due date.
 
 ### Per-customer billing engine
 
@@ -164,7 +167,8 @@ that has been credited already is refused rather than credited twice.
   payment events).
 - Two lines with the same item and description cannot share a consolidated invoice unless Selling Settings allows an
   item to be added more than once; give each subscription its own Service Identifier.
-- **Auto-billing Delay** in Subscription Settings is a leftover field; changing it has no effect.
+- There is no app-wide delay before a payment is collected; payment timing comes from **Days Until Due** on each
+  Subscription. Earlier versions had an **Auto-billing Delay** setting that nothing read; migrating removes it.
 
 ## Development
 
