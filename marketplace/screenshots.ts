@@ -71,7 +71,7 @@ export default {
 			route: "/app/subscription-settings",
 			alt: "The Automated Subscriptions section of Subscription Settings with its defaults",
 			waitForFn: formReady("Subscription Settings", "Subscription Settings"),
-			actions: showSection("sb_automated_subscriptions", "auto_billing_delay"),
+			actions: showSection("sb_automated_subscriptions", "annual_discount_percentage"),
 			mask: [".frappe-timestamp"],
 			readme: "feature",
 		},

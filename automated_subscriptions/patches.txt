@@ -5,3 +5,4 @@
 [post_model_sync]
 # Patches added in this section will be executed after doctypes are migrated
 automated_subscriptions.patches.v1_1.add_sales_invoice_subscription_index
+automated_subscriptions.patches.v1_2.drop_auto_billing_delay
