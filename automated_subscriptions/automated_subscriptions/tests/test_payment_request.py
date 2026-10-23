@@ -85,6 +85,7 @@ class TestPaymentRequest(IntegrationTestCase):
 		frappe.clear_document_cache("Customer", CUSTOMER)
 		frappe.db.set_single_value("Selling Settings", "allow_multiple_items", 1)
 		frappe.db.set_single_value("Subscription Settings", "auto_charge_max_lateness_days", 30)
+		frappe.db.set_single_value("Subscription Settings", "auto_billing_delay", 0)
 		frappe.flags.subscription_billing = None
 		self.account = make_gateway_account(GATEWAY)
 		set_plan_gateway(MONTH_PLAN, self.account)
@@ -97,14 +98,14 @@ class TestPaymentRequest(IntegrationTestCase):
 		super().tearDown()
 
 	# ---- fixtures
-	def make_sub(self, plan, start_date=None):
+	def make_sub(self, plan, start_date=None, days_until_due=0):
 		sub = create_subscription(
 			party=CUSTOMER,
 			start_date=start_date or self.today,
 			plans=[{"plan": plan, "qty": 1}],
 			generate_invoice_at=BEGINNING,
 			submit_invoice=0,
-			days_until_due=0,  # the customer's NET15 template sets the due date
+			days_until_due=days_until_due,  # 0: the customer's NET15 template sets the due date
 			do_not_save=True,
 		)
 		frappe.flags.in_import = True  # insert without core's catch-up billing
@@ -114,11 +115,11 @@ class TestPaymentRequest(IntegrationTestCase):
 			frappe.flags.in_import = False
 		return get_subscription(sub.name)
 
-	def make_invoice(self, plans=(MONTH_PLAN,), posting_date=None, submit=True):
+	def make_invoice(self, plans=(MONTH_PLAN,), posting_date=None, submit=True, days_until_due=0, due_in=15):
 		"""One subscription per plan; the first sub's own draft (posting_date = its period start) carries the
 		other subs' lines, like a consolidated invoice. Submitting fires the on_submit hook."""
 		posting_date = posting_date or self.today
-		subs = [self.make_sub(plan, posting_date) for plan in plans]
+		subs = [self.make_sub(plan, posting_date, days_until_due) for plan in plans]
 		invoice = subs[0].create_invoice()
 		for sub, plan in zip(subs[1:], plans[1:], strict=True):
 			invoice.append(
@@ -135,7 +136,7 @@ class TestPaymentRequest(IntegrationTestCase):
 			)
 		invoice.save()
 		self.assertEqual(as_date(invoice.posting_date), as_date(posting_date))
-		self.assertEqual(as_date(invoice.due_date), as_date(add_days(posting_date, 15)))
+		self.assertEqual(as_date(invoice.due_date), as_date(add_days(posting_date, due_in)))
 		if submit:
 			invoice.submit()
 		return invoice
@@ -320,3 +321,130 @@ class TestPaymentRequest(IntegrationTestCase):
 		data = charge.call_args.args[0]
 		self.assertEqual(data["mandate"], "MD000AUTOSUBTEST")
 		self.assertEqual(data["charge_date"], str(as_date(invoice.due_date)))
+
+	# ---- (k) Auto-billing Delay: the fallback for subscriptions without Days Until Due
+	def set_delay(self, days):
+		frappe.db.set_single_value("Subscription Settings", "auto_billing_delay", days)
+
+	def drop_payment_terms(self):
+		frappe.db.set_value("Customer", CUSTOMER, "payment_terms", None)
+		frappe.clear_document_cache("Customer", CUSTOMER)
+
+	def charged_on(self, invoice):
+		pr = self.single_request(invoice)
+		self.assertEqual(pr.docstatus, 1)
+		return as_date(pr.transaction_date)
+
+	def test_delay_applies_without_days_until_due(self):
+		"""No payment terms and no Days Until Due: the invoice is due on its posting date and the charge is
+		collected Auto-billing Delay days later (posting date + delay, as before the engine rewrite)."""
+		self.drop_payment_terms()
+		self.set_delay(5)
+		with patch.object(PaymentRequest, VALIDATION, return_value=False):
+			invoice = self.make_invoice(due_in=0)
+		self.assertEqual(self.charged_on(invoice), as_date(add_days(invoice.posting_date, 5)))
+
+	def test_delay_never_collects_before_the_due_date(self):
+		"""With payment terms (NET15) and no Days Until Due, posting date + delay wins only when it is later
+		than the due date: the delay can move a charge later, never earlier."""
+		self.set_delay(20)
+		with patch.object(PaymentRequest, VALIDATION, return_value=False):
+			invoice = self.make_invoice()
+		self.assertEqual(self.charged_on(invoice), as_date(add_days(invoice.posting_date, 20)))
+
+		self.set_delay(5)
+		with patch.object(PaymentRequest, VALIDATION, return_value=False):
+			invoice = self.make_invoice()
+		self.assertEqual(self.charged_on(invoice), as_date(invoice.due_date))
+		self.assertEqual(self.charged_on(invoice), as_date(add_days(invoice.posting_date, 15)))
+
+	def test_delay_ignored_with_days_until_due(self):
+		"""A subscription with Days Until Due dates its invoice's due date itself; the delay does not apply,
+		even when it is longer."""
+		self.drop_payment_terms()
+		self.set_delay(20)
+		with patch.object(PaymentRequest, VALIDATION, return_value=False):
+			invoice = self.make_invoice(days_until_due=10, due_in=10)
+		self.assertEqual(self.charged_on(invoice), as_date(add_days(invoice.posting_date, 10)))
+
+	def test_delay_ignored_when_any_line_sets_days_until_due(self):
+		"""Consolidated invoices group subscriptions by Days Until Due, so they agree; if a hand-built invoice
+		mixes them, one subscription with Days Until Due is enough to keep the due date."""
+		self.drop_payment_terms()
+		self.set_delay(20)
+		set_plan_gateway(MONTH_PLAN_2, self.account)  # core checks the header subscription's plans' gateway
+		posting = self.today
+		with_due = self.make_sub(MONTH_PLAN, posting, days_until_due=10)
+		without_due = self.make_sub(MONTH_PLAN_2, posting)
+		invoice = without_due.create_invoice()
+		invoice.append(
+			"items",
+			{
+				"item_code": ITEM,
+				"qty": 1,
+				"rate": 900,
+				"subscription": with_due.name,
+				"subscription_plan": MONTH_PLAN,
+				"subscription_period_start": with_due.current_invoice_start,
+				"subscription_period_end": with_due.current_invoice_end,
+			},
+		)
+		invoice.save()
+		self.assertEqual(as_date(invoice.due_date), as_date(posting))
+		with patch.object(PaymentRequest, VALIDATION, return_value=False):
+			invoice.submit()
+		self.assertEqual(self.charged_on(invoice), as_date(posting))
+
+	def test_zero_or_blank_delay_is_no_delay(self):
+		self.drop_payment_terms()
+		self.set_delay(0)
+		with patch.object(PaymentRequest, VALIDATION, return_value=False):
+			invoice = self.make_invoice(due_in=0)
+		self.assertEqual(self.charged_on(invoice), as_date(invoice.posting_date))
+
+		# blank: no tabSingles row at all (a site that never saved the field)
+		frappe.db.delete("Singles", {"doctype": "Subscription Settings", "field": "auto_billing_delay"})
+		frappe.clear_document_cache("Subscription Settings", "Subscription Settings")
+		with patch.object(PaymentRequest, VALIDATION, return_value=False):
+			invoice = self.make_invoice(due_in=0)
+		self.assertEqual(self.charged_on(invoice), as_date(invoice.posting_date))
+
+		# a negative value (written past the form's non-negative check) is treated as no delay
+		self.set_delay(-5)
+		with patch.object(PaymentRequest, VALIDATION, return_value=False):
+			invoice = self.make_invoice(due_in=0)
+		self.assertEqual(self.charged_on(invoice), as_date(invoice.posting_date))
+
+	def test_delay_does_not_revive_a_stale_invoice(self):
+		"""Staleness is judged on the due date: a delay that puts the collection date inside the lateness
+		window still leaves an invoice whose due date is too old as a draft."""
+		self.set_delay(60)  # posting - 60 + 60 = today, but due = today - 45
+		with patch.object(PaymentRequest, VALIDATION, return_value=False) as validation:
+			invoice = self.make_invoice(posting_date=add_days(self.today, -60))
+		validation.assert_not_called()
+		pr = self.single_request(invoice)
+		self.assertEqual(pr.docstatus, 0)
+		self.assertEqual(as_date(pr.transaction_date), as_date(self.today))
+
+	def test_gocardless_charge_date_carries_the_delay(self):
+		"""End to end through stock payments' GoCardless: the delayed collection date is the mandate charge date."""
+		self.drop_payment_terms()
+		self.set_delay(7)
+		controller = frappe.new_doc("GoCardless Settings")
+		with (
+			patch(
+				"erpnext.accounts.doctype.payment_request.payment_request._get_payment_gateway_controller",
+				return_value=controller,
+			),
+			patch.object(
+				GoCardlessSettings,
+				"check_mandate_validity",
+				return_value=({"mandate": "MD000AUTOSUBTEST"}, add_days(self.today, 3)),
+			),
+			patch.object(GoCardlessSettings, "create_payment_request") as charge,
+		):
+			invoice = self.make_invoice(due_in=0)
+		charge.assert_called()
+		self.assertEqual(
+			charge.call_args.args[0]["charge_date"], str(as_date(add_days(invoice.posting_date, 7)))
+		)

@@ -67,7 +67,7 @@
 		"readme": "feature",
 		"width": 2880,
 		"height": 1800,
-		"sha256": "ae93a81f6613f1c3bef02155b90ee5607231b94007111e999c45fa4b56c33a1a"
+		"sha256": "18e76f9db9903f27c6b502e01692473b615e76b235dcdeffeb8ff87344cf523d"
 	},
 	{
 		"name": "subscription-settings",
@@ -77,7 +77,7 @@
 		"readme": "feature",
 		"width": 2880,
 		"height": 1800,
-		"sha256": "a65c8e76c827d1cb191ca61ea575c687284afa9c3b25709ca4f9206f25c76426"
+		"sha256": "ca952bc0fa6bf641feb337a8d5682c09eb1f9de205a2db42fecf5109181a22da"
 	},
 	{
 		"name": "subscriptions",

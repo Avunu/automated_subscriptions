@@ -30,6 +30,7 @@ OUR_SETTINGS_FIELDS = (
 	"credit_note_on_cancellation",
 	"mid_term_billing_mode",
 	"auto_charge_max_lateness_days",
+	"auto_billing_delay",
 )
 
 
@@ -106,6 +107,13 @@ class TestFields(IntegrationTestCase):
 		self.assertEqual(field.in_standard_filter, 1)
 		self.assertEqual(meta.search_fields, "party, service_identifier")
 
+	def test_auto_billing_delay_field(self):
+		field = frappe.get_meta("Subscription Settings").get_field("auto_billing_delay")
+		self.assertIsNotNone(field)
+		self.assertEqual(field.fieldtype, "Int")
+		self.assertEqual(field.non_negative, 1)
+		self.assertIn("Days Until Due", field.description)
+
 	def test_settings_defaults_when_never_saved(self):
 		frappe.db.delete(
 			"Singles", {"doctype": "Subscription Settings", "field": ("in", list(OUR_SETTINGS_FIELDS))}
@@ -117,6 +125,7 @@ class TestFields(IntegrationTestCase):
 		self.assertEqual(settings.credit_note_on_cancellation, 1)
 		self.assertEqual(settings.mid_term_billing_mode, "Immediate")
 		self.assertEqual(settings.auto_charge_max_lateness_days, 30)
+		self.assertEqual(settings.auto_billing_delay, 0)
 		# core fields still come through (reset_settings saved them)
 		self.assertEqual(settings.grace_period, 0)
 		self.assertEqual(settings.cancel_after_grace, 0)

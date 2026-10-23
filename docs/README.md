@@ -18,6 +18,8 @@ its fields set is billed by stock ERPNext.
 - **Payment Requests for subscription invoices.** Every submitted subscription invoice with an outstanding amount
   gets a Payment Request through the gateway set on its plans. With a gateway that takes the payment itself, such as
   GoCardless with a mandate, the request is submitted without e-mailing the customer.
+- **Delayed collection.** An optional **Auto-billing Delay** pushes the charge date of subscriptions without
+  **Days Until Due** a set number of days past the invoice date.
 - **Safe defaults.** Credit notes and fully paid invoices are skipped, an invoice whose due date is too far in the
   past is left as a draft Payment Request for review, and a site-level kill switch stops all automatic charging.
 - **Billing anchors.** Align a customer's subscriptions to calendar months or years, or to an anniversary date, with
@@ -65,7 +67,7 @@ The app adds an **Automated Subscriptions** section to **Subscription Settings**
 | Annual Discount Percentage      | 16.67     | Used when a monthly plan is billed on a yearly term: yearly rate = monthly rate x 12 x (1 - discount).                                                                        |
 | Credit Note On Cancellation     | on        | On mid-term cancellation of an anchored or consolidated subscription, issue a Credit Note for the unused part of the period.                                                  |
 | Mid-term Billing Mode           | Immediate | For an anchored or consolidated subscription added mid-term: bill the prorated first invoice when the subscription is created (Immediate), or leave it to the next daily run. |
-| Auto-billing Delay              | 0         | Not read by the current code (see Limitations).                                                                                                                               |
+| Auto-billing Delay              | 0         | For subscriptions with no **Days Until Due**: collect the automatic charge this many days after the invoice's posting date, never before its due date. 0 means no delay.      |
 
 The defaults are written to the database on install and on every `bench migrate`, so the form and the engine see the
 same values.
@@ -102,7 +104,13 @@ An `on_submit` hook on Sales Invoice creates a Payment Request when all of these
   person);
 - the due date is not older than **Auto-charge Max Lateness**.
 
-The Payment Request is dated on the invoice's due date, so a late-running scheduler still charges. If the gateway
+The Payment Request is dated on the collection date, so a late-running scheduler still charges. The collection
+date is the invoice's due date, with one exception: when none of the subscriptions on the invoice sets **Days Until
+Due** and **Auto-billing Delay** is above 0, it is the posting date plus the delay, or the due date if that is later.
+A subscription with **Days Until Due** already sets the invoice's due date to the posting date plus those days, so
+the delay is ignored for it. With GoCardless the collection date is the mandate's charge date (or the mandate's
+next possible charge date, if later); the Payment Request itself is still raised and submitted when the invoice is.
+The lateness check above always uses the due date, so a delay never revives an invoice that is too old to charge. If the gateway
 takes the payment itself, as GoCardless does for a mandate, the request is submitted without an e-mail; otherwise it
 is submitted normally and the customer is notified. An invoice that is too old gets a draft Payment Request with a
 comment and an Error Log entry.
@@ -164,7 +172,6 @@ that has been credited already is refused rather than credited twice.
   payment events).
 - Two lines with the same item and description cannot share a consolidated invoice unless Selling Settings allows an
   item to be added more than once; give each subscription its own Service Identifier.
-- **Auto-billing Delay** in Subscription Settings is a leftover field; changing it has no effect.
 
 ## Development
 

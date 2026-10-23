@@ -11,11 +11,13 @@
         {
             "dt": "Subscription Settings",
             "default": 0,
+            "description": "Days after the invoice's posting date before an automatic charge is collected, for subscriptions with no Days Until Due. The charge is never dated before the invoice's due date. Ignored when the subscription sets Days Until Due; 0 means no delay.",
             "fieldname": "auto_billing_delay",
             "fieldtype": "Int",
             "insert_after": "sb_automated_subscriptions",
             "label": "Auto-billing Delay",
-            "module": "Automated Subscriptions"
+            "module": "Automated Subscriptions",
+            "non_negative": 1
         },
         {
             "dt": "Subscription Settings",

@@ -17,6 +17,7 @@ FIELDS = (
 	"credit_note_on_cancellation",
 	"mid_term_billing_mode",
 	"auto_charge_max_lateness_days",
+	"auto_billing_delay",
 )
 
 

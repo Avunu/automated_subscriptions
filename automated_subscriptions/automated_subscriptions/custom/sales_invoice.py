@@ -130,6 +130,28 @@ def resolve_payment_gateway_account(doc) -> str | None:
 	return gateways.pop()
 
 
+def get_collection_date(doc) -> date:
+	"""The date the automatic charge is collected on (the Payment Request's transaction_date).
+
+	Base: the invoice's payment-terms due date (posting date when it has none). When none of the invoice's
+	subscriptions sets Days Until Due, Subscription Settings > Auto-billing Delay applies as a fallback, as it
+	did before the engine rewrite: collect on posting date + delay, but never before the due date, so the
+	setting can only move a charge later. A subscription with Days Until Due already dates its invoice's due
+	date (core appends a payment-schedule row at posting date + days_until_due), and the delay is ignored.
+	0 or blank means no delay; a negative value is treated as 0."""
+	due_date = as_date(doc.due_date or doc.posting_date)
+	delay = max(cint(get_settings().auto_billing_delay), 0)
+	if not delay:
+		return due_date
+	subscriptions = get_invoice_subscriptions(doc)
+	if any(
+		cint(days)
+		for days in frappe.get_all("Subscription", {"name": ("in", subscriptions)}, pluck="days_until_due")
+	):
+		return due_date  # Days Until Due set: the due date is the collection date
+	return max(due_date, as_date(add_days(doc.posting_date, delay)))
+
+
 def subscription_payment_request(doc: BaseSalesInvoice, method=None):
 	"""on_submit doc_event: raise (and charge, when the gateway handles it) a Payment Request for a
 	subscription invoice. Rules, in order: not a subscription invoice; a return or nothing outstanding
@@ -140,7 +162,9 @@ def subscription_payment_request(doc: BaseSalesInvoice, method=None):
 	as a draft Payment Request with a comment and an Error Log; otherwise create, charge and submit.
 
 	Late fires are normal (posting_date = the period start for "Beginning") and must charge: nothing here
-	gates on posting_date == today. The collection date is the invoice's payment-terms due date."""
+	gates on posting_date == today. The collection date is the invoice's payment-terms due date, pushed later
+	by Auto-billing Delay for subscriptions without Days Until Due (get_collection_date). Staleness is judged
+	on the due date alone, so the delay never revives an invoice that is too old to charge."""
 	if not is_subscription_invoice(doc):
 		return
 	if doc.get("is_return") or flt(doc.outstanding_amount) <= 0:
@@ -167,10 +191,10 @@ def subscription_payment_request(doc: BaseSalesInvoice, method=None):
 	pr.is_a_subscription = 0
 	pr.set("subscription_plans", [])
 	due_date = as_date(doc.due_date or doc.posting_date)
-	# the payment-terms due date is the collection date. An ISO string, not a date: stock payments' GoCardless
-	# compares it with the mandate's next_possible_charge_date (a string from the API) via max(), and a date there
-	# raises TypeError, which payment_gateway_validation swallows into False: no charge and no email
-	pr.transaction_date = due_date.isoformat()
+	# the collection date (due date, or later with Auto-billing Delay). An ISO string, not a date: stock payments'
+	# GoCardless compares it with the mandate's next_possible_charge_date (a string from the API) via max(), and a
+	# date there raises TypeError, which payment_gateway_validation swallows into False: no charge and no email
+	pr.transaction_date = get_collection_date(doc).isoformat()
 	pr.save(ignore_permissions=True)
 	max_lateness = cint(get_settings().auto_charge_max_lateness_days)
 	if due_date < as_date(add_days(nowdate(), -max_lateness)):
