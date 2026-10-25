@@ -75,10 +75,6 @@ its fields set is billed by stock ERPNext.
 
 ## Installation
 
-On Frappe Cloud, install Automated Subscriptions from the [Frappe marketplace](https://cloud.frappe.io/marketplace/apps/automated_subscriptions).
-
-On a bench of your own:
-
 ```bash
 bench get-app https://github.com/Avunu/automated_subscriptions --branch version-16
 bench --site <site> install-app automated_subscriptions
