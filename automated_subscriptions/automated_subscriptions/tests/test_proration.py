@@ -689,7 +689,7 @@ class TestProration(IntegrationTestCase):
 			self.assertEqual(sub.status, "Cancelled")
 			self.assertNotIn("subscription_billing_window", sub.flags)
 
-	# ---- anchor switched on after the sub exists (M5, DECISIONS.md Q-14)
+	# ---- anchor switched on after the sub exists (docs/anchored-billing.md)
 	def test_anchor_switched_on_existing_sub_bills_stub(self):
 		customer = make_anchored_customer("_Test AS Late Anchor Customer", "").name
 		with frozen_today("2026-09-02"):

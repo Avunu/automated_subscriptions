@@ -6,9 +6,9 @@
 The runner is the only place a consolidating customer's subscriptions are billed. Core's daily job
 (`create_subscription_process` -> `process_all` -> `Subscription.process`) reaches it through the mixin's
 `process()` delegation; the desk and scripts reach it through `run_consolidated_billing` /
-`preview_consolidated_billing`. Nothing here adds a scheduler hook (DECISIONS.md D-08).
+`preview_consolidated_billing`. Nothing here adds a scheduler hook (docs/development/architecture.md D-08).
 
-Mechanics per group (DECISIONS.md D-18): a site-scoped file lock per party, a savepoint, the subscriptions
+Mechanics per group (docs/development/architecture.md D-18): a site-scoped file lock per party, a savepoint, the subscriptions
 re-read with `for_update=True` (fresh snapshot under REPEATABLE-READ), the exact core due predicate re-checked,
 then every due sub's own `process()`. Inside the run the mixin's `create_invoice` routes sub[0] through core's
 `create_invoice` with submission suppressed (the "sink", a saved draft whose header is sub[0]) and absorbs every
@@ -20,7 +20,7 @@ because one party may split into several groups (§3.2 key) and a later group's 
 Replay trap (core semantics, unchanged here): `set_subscription_status` compares the current invoice's due date
 against *today*, not the run's posting date, so replaying old periods (Process Subscription with a past posting
 date) sets Unpaid / Cancelled exactly as stock does. Run migration replays with `cancel_after_grace = 0` and never
-trust statuses produced by a replay (DECISIONS.md Q-10).
+trust statuses produced by a replay (docs/run-billing.md).
 
 Memo lifetime: the run memo (`_run_ctx().done`) is scoped to `frappe.local`, i.e. one HTTP request, one RQ job or
 one `bench execute`. A `bench console` or a long script keeps it for the whole session, so a second `process_all` /
