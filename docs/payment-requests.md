@@ -38,9 +38,13 @@ A late run still charges. If the daily job runs a day late, or you process an ea
 
 ## E-mail or no e-mail
 
-If the gateway takes the payment itself, as GoCardless does when the customer has an active mandate, the Payment Request is submitted with **Mute Email** set: the customer gets no payment link, because nothing is left for them to do. Otherwise the request is submitted normally, and ERPNext e-mails the customer a payment link at the invoice's contact e-mail.
+The gateway is called once per Payment Request, when the request is submitted. For a gateway that takes the payment itself, such as GoCardless with an active mandate, that call is the charge. The app holds the e-mail back until the gateway has answered, then:
 
-ERPNext's check of the gateway answers the same way when it fails with an error, for example when the gateway cannot be reached, as when the gateway took the payment. The app cannot tell the two apart, so such a request is also submitted with **Mute Email** set and nothing is charged. Compare the Payment Requests with the payments in the gateway when you start using it.
+- **The gateway returned a payment link.** This is a redirect gateway such as Stripe, or GoCardless for a customer without an active mandate. Nothing is charged, and the app e-mails the customer the payment link at the invoice's contact e-mail, with the same message and Communication that ERPNext sends.
+- **The gateway took the payment.** It recorded the charge as an Integration Request against the Payment Request with the status Authorized or Completed. **Mute Email** is set, and the customer gets no e-mail, because nothing is left for them to do.
+- **The gateway did neither.** ERPNext's check of the gateway gives the same answer when it fails with an error, for example when the gateway cannot be reached, as when the gateway took the payment. GoCardless also gives that answer when its payments API fails or refuses the payment, after it has logged an Integration Request, which it leaves Queued or sets to Failed or Cancelled. When no Integration Request is Authorized or Completed, the app treats the payment as not confirmed. The request stays submitted with the status Requested, not Paid, and **Mute Email** stays off. Nothing is e-mailed, the gateway is not called again, and the app adds the comment "Payment not confirmed: the payment gateway neither confirmed a payment nor returned a payment link. Check the payment in the gateway and the Error Log, then collect the payment manually." and writes an Error Log titled "Subscription payment not confirmed: `<PAYMENT_REQUEST>`".
+
+A gateway account with the Phone payment channel, such as M-Pesa, is left to ERPNext: it sends the request to the customer's phone and no e-mail.
 
 ## Invoices that are too late
 

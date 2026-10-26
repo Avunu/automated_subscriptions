@@ -5,7 +5,8 @@
 from the line plans, header-sub plan validation switched off, the payment-terms due date as the collection
 date, a kill switch, a staleness window that leaves a draft, and no request at all for returns."""
 
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 import frappe
 from erpnext.accounts.doctype.payment_request.payment_request import PaymentRequest
@@ -19,6 +20,7 @@ from erpnext.accounts.doctype.subscription.test_subscription import (
 from frappe.tests import IntegrationTestCase
 from frappe.utils import add_days, nowdate
 from payments.payment_gateways.doctype.gocardless_settings.gocardless_settings import GoCardlessSettings
+from payments.payment_gateways.doctype.stripe_settings.stripe_settings import StripeSettings
 
 from automated_subscriptions.automated_subscriptions.billing.dates import as_date
 from automated_subscriptions.automated_subscriptions.tests.utils import (
@@ -36,6 +38,8 @@ GATEWAY_2 = "_Test AS Gateway 2"
 TEMPLATE = "_Test AS NET15"
 BEGINNING = "Beginning of the current subscription period"
 VALIDATION = "payment_gateway_validation"
+CONTROLLER = "erpnext.accounts.doctype.payment_request.payment_request._get_payment_gateway_controller"
+NOT_CONFIRMED = ("like", "Subscription payment not confirmed: %")
 
 
 def make_gateway_account(gateway):
@@ -65,6 +69,64 @@ def payment_requests_for(invoice):
 		"Payment Request",
 		{"reference_doctype": "Sales Invoice", "reference_name": invoice.name},
 		["name", "docstatus"],
+	)
+
+
+def record_charge(pr):
+	"""What an off-session gateway leaves behind when it takes the payment: an Integration Request against
+	the Payment Request, moved to Authorized once the payments API accepted the payment. Used as the side
+	effect of a stubbed payment_gateway_validation returning False."""
+	frappe.get_doc(
+		{
+			"doctype": "Integration Request",
+			"integration_request_service": "GoCardless",
+			"reference_doctype": "Payment Request",
+			"reference_docname": pr.name,
+			"data": "{}",
+			"status": "Authorized",
+		}
+	).insert(ignore_permissions=True)
+	return False
+
+
+def charging_gateway():
+	"""payment_gateway_validation stubbed as a gateway that charged the mandate itself."""
+	return patch.object(PaymentRequest, VALIDATION, autospec=True, side_effect=record_charge)
+
+
+def integration_requests_for(pr):
+	return frappe.db.count(
+		"Integration Request", {"reference_doctype": "Payment Request", "reference_docname": pr.name}
+	)
+
+
+def integration_request_statuses(pr):
+	return frappe.get_all(
+		"Integration Request",
+		{"reference_doctype": "Payment Request", "reference_docname": pr.name},
+		pluck="status",
+	)
+
+
+def gocardless_api(payments_create):
+	"""Stock GoCardless with a mandate and only the network stubbed: the mandate lookup, and the client whose
+	payments.create is the charge. Everything between (create_payment_request, the Integration Request,
+	create_charge_on_gocardless and its status handling) is the real controller."""
+	client = MagicMock()
+	client.payments.create.side_effect = payments_create
+
+	def initialize_client(settings):
+		settings.client = client
+		return client
+
+	return client, (
+		patch(CONTROLLER, side_effect=lambda gateway: frappe.new_doc("GoCardless Settings")),
+		patch.object(
+			GoCardlessSettings,
+			"check_mandate_validity",
+			return_value=({"mandate": "MD000AUTOSUBTEST"}, add_days(nowdate(), 3)),
+		),
+		patch.object(GoCardlessSettings, "initialize_client", autospec=True, side_effect=initialize_client),
 	)
 
 
@@ -147,11 +209,11 @@ class TestPaymentRequest(IntegrationTestCase):
 
 	# ---- (a)
 	def test_gateway_from_line_plans(self):
-		with patch.object(PaymentRequest, VALIDATION, return_value=False) as validation:
+		with charging_gateway() as validation:
 			invoice = self.make_invoice((MONTH_PLAN, MONTH_PLAN_2))
-		# once by the hook (charge / mute decision), once by core's before_submit -> set_payment_request_url;
-		# a real gateway caches the outcome on pr.flags so the second call never charges again
-		self.assertEqual(validation.call_count, 2)
+		# only core's before_submit -> set_payment_request_url calls the gateway: for an off-session gateway
+		# that call is the charge, so a second one would charge the customer twice
+		self.assertEqual(validation.call_count, 1)
 		self.assertEqual([d.subscription_plan for d in invoice.items], [MONTH_PLAN, MONTH_PLAN_2])
 		pr = self.single_request(invoice)
 		self.assertEqual(pr.payment_gateway_account, self.account)
@@ -217,9 +279,9 @@ class TestPaymentRequest(IntegrationTestCase):
 
 		# the window is a setting: widen it and the same invoice charges
 		frappe.db.set_single_value("Subscription Settings", "auto_charge_max_lateness_days", 60)
-		with patch.object(PaymentRequest, VALIDATION, return_value=False) as validation:
+		with charging_gateway() as validation:
 			invoice = self.make_invoice(posting_date=posting)
-		validation.assert_called()
+		validation.assert_called_once()
 		self.assertEqual(self.single_request(invoice).docstatus, 1)
 
 	# ---- (e)
@@ -235,18 +297,20 @@ class TestPaymentRequest(IntegrationTestCase):
 
 	# ---- (f)
 	def test_gateway_validation_outcome_drives_mute(self):
-		with patch.object(PaymentRequest, VALIDATION, return_value=False):
+		with charging_gateway(), patch.object(PaymentRequest, "send_email") as send_email:
 			invoice = self.make_invoice()
 		self.assertEqual(self.single_request(invoice).mute_email, 1)  # the gateway charged the mandate itself
+		send_email.assert_not_called()
 
 		# True = the customer must visit the payment URL: the request is emailed. The test gateway has no
 		# controller, so the URL and the mail (a Redis-backed enqueue) are stubbed at their entry points.
 		with (
-			patch.object(PaymentRequest, VALIDATION, return_value=True),
+			patch.object(PaymentRequest, VALIDATION, return_value=True) as validation,
 			patch.object(PaymentRequest, "get_payment_url", return_value="https://example.invalid/pay"),
 			patch.object(PaymentRequest, "send_email") as send_email,
 		):
 			invoice = self.make_invoice()
+		validation.assert_called_once()
 		pr = self.single_request(invoice)
 		self.assertEqual(pr.mute_email, 0)
 		self.assertEqual(pr.docstatus, 1)
@@ -255,9 +319,9 @@ class TestPaymentRequest(IntegrationTestCase):
 
 	# ---- (g)
 	def test_late_fire_still_charges(self):
-		with patch.object(PaymentRequest, VALIDATION, return_value=False) as validation:
+		with charging_gateway() as validation:
 			invoice = self.make_invoice(posting_date=add_days(self.today, -3))
-		validation.assert_called()
+		validation.assert_called_once()
 		self.assertEqual(as_date(invoice.due_date), as_date(add_days(self.today, 12)))
 		pr = self.single_request(invoice)
 		self.assertEqual(pr.docstatus, 1)
@@ -265,7 +329,7 @@ class TestPaymentRequest(IntegrationTestCase):
 
 	# ---- (h)
 	def test_return_creates_no_pr(self):
-		with patch.object(PaymentRequest, VALIDATION, return_value=False) as validation:
+		with charging_gateway() as validation:
 			invoice = self.make_invoice()
 			self.assertEqual(self.single_request(invoice).docstatus, 1)
 			calls_for_original = validation.call_count
@@ -298,25 +362,175 @@ class TestPaymentRequest(IntegrationTestCase):
 		the API returns that date as a string. A datetime.date transaction_date made max() raise TypeError, which
 		payment_gateway_validation turns into False ("handled"): a mandate customer was neither charged nor emailed.
 		The mandate lookup (an API call) and the charge itself are stubbed at their entry points."""
-		controller = frappe.new_doc("GoCardless Settings")
 		next_possible = add_days(self.today, 3)  # before the NET15 due date, so the due date wins
 		with (
-			patch(
-				"erpnext.accounts.doctype.payment_request.payment_request._get_payment_gateway_controller",
-				return_value=controller,
-			),
+			patch(CONTROLLER, side_effect=lambda gateway: frappe.new_doc("GoCardless Settings")),
 			patch.object(
 				GoCardlessSettings,
 				"check_mandate_validity",
 				return_value=({"mandate": "MD000AUTOSUBTEST"}, next_possible),
 			),
-			patch.object(GoCardlessSettings, "create_payment_request") as charge,
+			patch.object(GoCardlessSettings, "create_payment_request", autospec=True) as charge,
 		):
 			invoice = self.make_invoice()
 		pr = self.single_request(invoice)
 		self.assertEqual(pr.docstatus, 1)
-		self.assertEqual(pr.mute_email, 1)  # the mandate was charged: nothing to email
-		charge.assert_called()
-		data = charge.call_args.args[0]
+		charge.assert_called_once()  # was twice: once by the hook, once by core's before_submit
+		data = charge.call_args.args[1]
 		self.assertEqual(data["mandate"], "MD000AUTOSUBTEST")
 		self.assertEqual(data["charge_date"], str(as_date(invoice.due_date)))
+
+	# ---- (k)
+	def test_stock_gocardless_mandate_charged_once(self):
+		"""The real GoCardless create_payment_request and create_charge_on_gocardless run, with only the
+		network stubbed: one mandate check, one payments.create, one Integration Request (Authorized), Mute
+		Email set and no e-mail."""
+		before = error_log_count(NOT_CONFIRMED)
+		client, (controller, mandate, init) = gocardless_api(
+			lambda **kwargs: SimpleNamespace(status="pending_submission")
+		)
+		with (
+			controller,
+			mandate as mandate_check,
+			init,
+			patch.object(PaymentRequest, "send_email") as send_email,
+		):
+			invoice = self.make_invoice()
+		pr = self.single_request(invoice)
+		mandate_check.assert_called_once()
+		client.payments.create.assert_called_once()
+		params = client.payments.create.call_args.kwargs
+		self.assertEqual(params["headers"]["Idempotency-Key"], pr.name)
+		self.assertEqual(params["params"]["links"]["mandate"], "MD000AUTOSUBTEST")
+		self.assertEqual(integration_request_statuses(pr), ["Authorized"])
+		self.assertEqual(pr.docstatus, 1)
+		self.assertEqual(pr.status, "Requested")  # charged, not settled: see "After the payment"
+		self.assertEqual(pr.mute_email, 1)
+		self.assertFalse(pr.payment_url)
+		send_email.assert_not_called()
+		self.assertEqual(error_log_count(NOT_CONFIRMED), before)
+
+	# ---- (k2)
+	def test_stock_gocardless_charge_that_fails_is_not_treated_as_paid(self):
+		"""Stock GoCardless logs the Integration Request before it calls the payments API and swallows what
+		goes wrong after: the API raising leaves it Queued, a refused payment sets Failed or Cancelled. Either
+		way validation returns False with an Integration Request behind it, and nothing was charged: Mute Email
+		stays off and the request is flagged for a human. The API is called once, never retried."""
+
+		def raises(**kwargs):
+			raise ConnectionError("unreachable")
+
+		cases = (
+			("raises", raises, "Queued"),
+			("failed", lambda **kwargs: SimpleNamespace(status="failed"), "Failed"),
+			("cancelled", lambda **kwargs: SimpleNamespace(status="cancelled"), "Cancelled"),
+		)
+		for label, payments_create, status in cases:
+			with self.subTest(label):
+				before = error_log_count(NOT_CONFIRMED)
+				client, (controller, mandate, init) = gocardless_api(payments_create)
+				with controller, mandate, init, patch.object(PaymentRequest, "send_email") as send_email:
+					invoice = self.make_invoice()
+				pr = self.single_request(invoice)
+				client.payments.create.assert_called_once()
+				self.assertEqual(integration_request_statuses(pr), [status])
+				self.assertEqual(pr.docstatus, 1)
+				self.assertEqual(pr.status, "Requested")
+				self.assertEqual(pr.mute_email, 0)
+				self.assertFalse(pr.payment_url)
+				send_email.assert_not_called()
+				self.assertEqual(error_log_count(NOT_CONFIRMED), before + 1)
+
+	# ---- (l)
+	def test_gateway_check_that_raises_is_not_treated_as_paid(self):
+		"""payment_gateway_validation swallows any exception from the gateway into False, the same answer as
+		"charged". With no Integration Request behind it, the request stays submitted and unpaid, Mute Email
+		stays off, nothing is e-mailed, and an Error Log plus a comment ask a human to collect it. The gateway
+		is not called a second time."""
+		before = error_log_count(NOT_CONFIRMED)
+		with (
+			patch(CONTROLLER, side_effect=lambda gateway: frappe.new_doc("GoCardless Settings")),
+			patch.object(
+				GoCardlessSettings, "check_mandate_validity", side_effect=ConnectionError("unreachable")
+			) as mandate_check,
+			patch.object(GoCardlessSettings, "create_payment_request") as charge,
+			patch.object(PaymentRequest, "send_email") as send_email,
+		):
+			invoice = self.make_invoice()
+		pr = self.single_request(invoice)
+		mandate_check.assert_called_once()
+		charge.assert_not_called()
+		send_email.assert_not_called()
+		self.assertEqual(pr.docstatus, 1)
+		self.assertEqual(pr.status, "Requested")
+		self.assertNotEqual(pr.status, "Paid")
+		self.assertEqual(pr.mute_email, 0)
+		self.assertFalse(pr.payment_url)
+		self.assertEqual(integration_requests_for(pr), 0)
+		self.assertEqual(error_log_count(NOT_CONFIRMED), before + 1)
+		self.assertGreaterEqual(error_log_count(f"Subscription payment not confirmed: {pr.name}"), 1)
+		comments = frappe.get_all(
+			"Comment",
+			{"reference_doctype": "Payment Request", "reference_name": pr.name, "comment_type": "Comment"},
+			pluck="content",
+		)
+		self.assertEqual(len(comments), 1)
+		self.assertIn("Payment not confirmed", comments[0])
+
+	# ---- (m)
+	def test_redirect_gateway_emails_the_link(self):
+		"""A redirect gateway (Stripe) has no on_payment_request_submission: nothing is charged on submit,
+		the request gets the gateway's payment URL and the customer is e-mailed it once, as before."""
+		self.assertFalse(hasattr(StripeSettings, "on_payment_request_submission"))
+		with (
+			patch(CONTROLLER, side_effect=lambda gateway: frappe.new_doc("Stripe Settings")),
+			patch.object(StripeSettings, "validate_transaction_currency") as currency_check,
+			patch.object(StripeSettings, "validate_minimum_transaction_amount"),
+			patch.object(
+				StripeSettings, "get_payment_url", return_value="https://example.invalid/stripe"
+			) as payment_url,
+			patch.object(
+				PaymentRequest,
+				VALIDATION,
+				autospec=True,
+				side_effect=PaymentRequest.payment_gateway_validation,
+			) as validation,
+			patch.object(PaymentRequest, "send_email") as send_email,
+		):
+			invoice = self.make_invoice()
+		pr = self.single_request(invoice)
+		validation.assert_called_once()
+		currency_check.assert_called_once()
+		payment_url.assert_called_once()
+		send_email.assert_called_once()
+		self.assertEqual(pr.docstatus, 1)
+		self.assertEqual(pr.status, "Requested")
+		self.assertEqual(pr.mute_email, 0)
+		self.assertEqual(pr.payment_url, "https://example.invalid/stripe")
+		self.assertEqual(integration_requests_for(pr), 0)
+		communications = frappe.get_all(
+			"Communication",
+			{"reference_doctype": "Sales Invoice", "reference_name": invoice.name, "subject": pr.subject},
+		)
+		self.assertEqual(len(communications), 1)
+
+	# ---- (n)
+	def test_phone_gateway_is_left_to_core(self):
+		"""A phone channel (M-Pesa) request is sent to the customer's phone by core's before_submit, which logs
+		a Queued Integration Request and never e-mails: no URL is expected and nothing is flagged."""
+		frappe.db.set_value("Payment Gateway Account", self.account, "payment_channel", "Phone")
+		before = error_log_count(NOT_CONFIRMED)
+		with (
+			patch.object(PaymentRequest, VALIDATION) as validation,
+			patch.object(PaymentRequest, "request_phone_payment", autospec=True) as phone,
+			patch.object(PaymentRequest, "send_email") as send_email,
+		):
+			invoice = self.make_invoice()
+		pr = self.single_request(invoice)
+		phone.assert_called_once()
+		validation.assert_not_called()
+		send_email.assert_not_called()
+		self.assertEqual(pr.docstatus, 1)
+		self.assertEqual(pr.payment_channel, "Phone")
+		self.assertEqual(pr.mute_email, 1)  # core mutes every non-Email channel
+		self.assertEqual(error_log_count(NOT_CONFIRMED), before)
