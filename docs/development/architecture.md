@@ -101,7 +101,7 @@ The request is created with `make_payment_request(..., return_doc=True)`, then:
 - `is_a_subscription` is cleared and `subscription_plans` emptied, because ERPNext fills them from the header subscription and validates every plan's gateway against the request's, which fails on a consolidated invoice.
 - `transaction_date` is set to the invoice's due date as an ISO string. The stock GoCardless controller compares it with the mandate's next possible charge date, a string from the API, and a `date` there raises a `TypeError` that `payment_gateway_validation` swallows.
 - A due date older than **Auto-charge Max Lateness (days)** leaves the request as a draft with a comment and an Error Log.
-- `payment_gateway_validation()` returning `False` means the gateway handled the payment itself, so the request is submitted with `mute_email` set.
+- Otherwise `submit_and_notify` submits it with `flags.mute_email` set. The app never calls `payment_gateway_validation()` itself: ERPNext's `before_submit` calls it through `set_payment_request_url`, and for an off-session gateway (GoCardless with a mandate) `on_payment_request_submission` is the charge, so a second call would charge twice. After the submit, a `payment_url` means a link gateway, and the app sends the e-mail and Communication that core held back. No URL with an Integration Request against the request means the gateway charged, and `mute_email` is set. No URL and no Integration Request means `payment_gateway_validation` swallowed an exception: the request stays Requested with a comment and an Error Log, and is not resubmitted.
 
 Late runs are normal (a period billed at its start may post days later), so nothing compares the posting date with today.
 
