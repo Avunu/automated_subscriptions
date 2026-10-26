@@ -24,7 +24,7 @@ Align a customer's subscriptions to calendar months or years, or to an anniversa
 
 ### Consolidated invoices
 
-Bill every subscription of a customer that falls due on the same day on one Sales Invoice, with one line per subscription. Each line records the subscription, the plan and the exact period it bills, and a **Service Identifier** on the Subscription names what the line is for. See [Consolidate invoices](consolidated-invoices.md).
+Bill every subscription of a customer that falls due on the same day on one Sales Invoice, with one line per plan of each subscription. Each line records the subscription, the plan and the exact period it bills, and a **Service Identifier** on the Subscription names what the line is for. See [Consolidate invoices](consolidated-invoices.md).
 
 ![One Sales Invoice billing four subscriptions of Riverbend Dental Group, each prorated for January 15 to 31](screenshots/consolidated-invoice-light.webp)
 

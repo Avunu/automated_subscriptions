@@ -19,7 +19,7 @@ prek run --all-files
 frappe-test                  # the tests with coverage, the way CI runs them
 ```
 
-The app has no front-end code and no build step. `package.json` holds only the formatter, the linter and the TypeScript check of `marketplace/screenshots.ts`.
+The app has no front-end code and no build step. `package.json` holds the formatter, the linter and the TypeScript check of `marketplace/screenshots.ts`, and scripts that run ruff and ty on the Python code.
 
 On a bench of your own, install ERPNext and Frappe Payments on a test site and run the tests there. Use a development or test site, never production:
 

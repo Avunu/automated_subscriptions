@@ -6,13 +6,12 @@ order: 1
 updated: 2026-10-26
 ---
 
-Automated Subscriptions installs like any Frappe app. It has no front-end build and no settings page of its own: everything it adds is custom fields on ERPNext documents, an index and the defaults of four settings.
+Automated Subscriptions installs like any Frappe app. It has no front-end build and no settings page of its own: everything it adds is custom fields and property setters on ERPNext documents, an index and the defaults of four settings.
 
 ## Before you start
 
 - A bench with Frappe v16, and a site that already has ERPNext and [Frappe Payments](https://github.com/frappe/payments) installed. Both are in the app's `required_apps`.
 - Python 3.14 or newer in the bench's environment.
-- A System Manager login on the site.
 
 > [!WARNING]
 > Installing the app on a site with subscription plans that have a **Payment Gateway** set turns on automatic charging for their invoices straight away. On a staging copy of a live site, set the kill switch first: see [Stop all automatic charging](configuration.md#stop-all-automatic-charging).
@@ -44,7 +43,7 @@ bench get-app https://github.com/Avunu/automated_subscriptions --branch develop
 
 The app creates no roles, no records and no scheduled job of its own. It adds no workspace or report either.
 
-Nothing changes for existing customers: the new Customer fields are blank or off, so every customer stays on stock ERPNext billing until you set them. Automatic charging, on the other hand, starts at once for every subscription plan that has a **Payment Gateway**.
+Nothing changes for existing customers: the new Customer fields are blank or off, so every customer stays on stock ERPNext billing until you set them. The new invoice lines of every customer subscription do carry the subscription, plan and period, and its **Service Identifier** as the description once you set one. Automatic charging, on the other hand, starts at once for every subscription plan that has a **Payment Gateway**.
 
 ## Upgrade
 

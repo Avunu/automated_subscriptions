@@ -50,7 +50,7 @@ Full documentation: [docs.avunu.net/automated-subscriptions/docs/](https://docs.
 - **Billing anchors.** Align a customer's subscriptions to calendar months or years, or to an anniversary date, with
   the first period prorated by calendar days. Monthly plans can be billed yearly with a discount.
 - **Consolidated invoices.** Bill every subscription of a customer that falls due on the same day on one Sales
-  Invoice, one line per subscription, each line recording the plan and the exact period it bills.
+  Invoice, one line per plan of each subscription, each line recording the plan and the exact period it bills.
 - **Credit notes on cancellation.** Cancelling an anchored or consolidated subscription that was billed in advance
   credits the unused days.
 - **Service Identifier.** A free-text field on Subscription (a site, a domain, a seat pool), shown in the list,

@@ -47,6 +47,8 @@ On Subscription:
 
 Pricing Rules overwrite an item's `rate` whenever the invoice's missing values are set (D-07). ERPNext's `create_invoice` calls `set_missing_values()` before it saves, so the `before_validate` hook alone is too late. The Subscription extension wraps invoice creation in `billing_context`, which sets `frappe.flags.subscription_billing`; `AutoSubSalesInvoice.set_missing_values` and the `before_validate` hook both read it and set `ignore_pricing_rule` on the invoice, which then keeps the setting on later saves. The override re-declares `@frappe.whitelist()`, because the desk calls `set_missing_values` through `run_doc_method` when **Is POS** is ticked.
 
+`AutoSubSalesInvoice.set_payment_schedule` turns the `datetime.date` posting date that ERPNext's `create_invoice` stamps into an ISO string before ERPNext builds the payment schedule. ERPNext's whitelisted `get_payment_term_details` declares `posting_date: str | None`, and without the conversion Frappe's type check refuses the date, so every subscription invoice of a customer with a **Payment Terms Template** fails with `FrappeTypeError`.
+
 `_enrich_items` stamps every Customer invoice line with its subscription, plan and billed period, and uses the **Service Identifier** as the description. The period goes into the app's own **Subscription Period Start** and **Subscription Period End**, not into ERPNext's service dates, because ERPNext clears those on every non-deferred line when it validates (D-01).
 
 ## Consolidated billing

@@ -49,7 +49,7 @@ bench --site <SITE_NAME> execute \
   --kwargs '{"subscription": "<SUBSCRIPTION>", "cancel_date": "2026-03-15"}'
 ```
 
-It returns the subscription, the names of the Credit Notes and the total credited. The days are still counted from `cancel_date` when you pass `posting_date`. You need write permission on the Subscription and submit permission on Sales Invoice. Unlike the desk button, it refuses a subscription that does not meet the conditions above instead of falling back to stock cancellation.
+It returns the subscription, the names of the Credit Notes and the total credited. The days are still counted from `cancel_date` when you pass `posting_date`. You need write permission on the Subscription and submit permission on Sales Invoice. It does not fall back to stock cancellation: it refuses a supplier subscription, a subscription billed at the end of the period, an already cancelled one, and any subscription while **Credit Note On Cancellation** is off. Unlike the desk button, it does not check the customer's billing fields, so it also credits a subscription of a customer with no anchor and no consolidation.
 
 ## Credits are never issued twice
 

@@ -67,7 +67,7 @@ The anchor applies to the customer's existing subscriptions too. At the next bil
 
 **Mid-term Billing Mode** in **Subscription Settings** decides when the first, prorated invoice of a new subscription of an anchored customer is made:
 
-- **Immediate** (the default): when the subscription is saved, as stock ERPNext does. A subscription that starts in the future is billed by the daily run once its start date comes.
+- **Immediate** (the default): when the subscription is saved, if its first invoice is already due, as stock ERPNext does. A subscription that starts in the future, or whose first invoice falls due later (one billed at the end of the period, for example), is billed by the daily run.
 - **Next Daily Run**: by ERPNext's daily Process Subscription job.
 
 ## Backdated start dates

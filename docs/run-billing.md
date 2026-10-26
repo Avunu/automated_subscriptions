@@ -14,7 +14,7 @@ The app adds a **Customer** field to **Process Subscription**, so a run can be l
 
 1. Open **Process Subscription** and create a new one.
 2. Set **Posting Date** (today, or a past date to bill an earlier period).
-3. Set **Customer**. Optionally also set **Subscription** to process just one of that customer's subscriptions.
+3. Set **Customer**. Optionally also set **Subscription** to process only one of that customer's subscriptions.
 4. Save and submit.
 
 The customer's subscriptions that are not cancelled are processed in the order they were created, in one background job on the long queue that starts once the submit is saved. For a consolidating customer the first subscription bills the whole customer, as in the daily run. The submit does not wait for the invoices, and a failure does not undo it: each subscription that fails is written to the Error Log (titled "Subscription failed" by ERPNext), and an unexpected error in the job is logged as "Process Subscription (customer) failed".
@@ -42,6 +42,7 @@ It takes these arguments:
 | `party_type`   | `Customer`    | Only customers are consolidated; any other value bills nothing.            |
 | `company`      | All companies | One company. A subscription with no company counts as the default company. |
 | `lock_timeout` | 60            | Seconds to wait for a customer that another run is billing.                |
+| `dry_run`      | False         | True runs the billing and rolls it back, as the preview below does.        |
 
 Each summary names the customer, the invoice, the subscriptions on it, every line with its period and amount, the totals and the payment schedule. A group that failed is reported with its `errors` instead, and the run goes on with the next customer. It needs write permission on Subscription.
 
@@ -55,7 +56,7 @@ bench --site <SITE_NAME> execute \
   --kwargs '{"posting_date": "2026-02-01"}'
 ```
 
-It needs read permission on Subscription.
+It needs read and write permission on Subscription: it checks read itself, then runs `run_consolidated_billing`, which checks write.
 
 > [!WARNING]
 > The preview ends with a full database rollback, so anything you have not committed in the same console session is lost. Commit first when you call it from `bench console`.

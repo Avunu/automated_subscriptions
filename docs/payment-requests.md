@@ -40,6 +40,8 @@ A late run still charges. If the daily job runs a day late, or you process an ea
 
 If the gateway takes the payment itself, as GoCardless does when the customer has an active mandate, the Payment Request is submitted with **Mute Email** set: the customer gets no payment link, because nothing is left for them to do. Otherwise the request is submitted normally, and ERPNext e-mails the customer a payment link at the invoice's contact e-mail.
 
+ERPNext's check of the gateway answers the same way when it fails with an error, for example when the gateway cannot be reached, as when the gateway took the payment. The app cannot tell the two apart, so such a request is also submitted with **Mute Email** set and nothing is charged. Compare the Payment Requests with the payments in the gateway when you start using it.
+
 ## Invoices that are too late
 
 An invoice whose due date is more than **Auto-charge Max Lateness (days)** in the past (30 by default, in **Subscription Settings**) is not charged. Its Payment Request is saved as a draft with the comment "Left as draft: due date `<DUE_DATE>` is more than `<DAYS>` days in the past. Charge manually.", and an Error Log titled "Stale subscription invoice not auto-charged: `<INVOICE>`" is written.
