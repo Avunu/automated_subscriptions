@@ -130,13 +130,25 @@ def resolve_payment_gateway_account(doc) -> str | None:
 	return gateways.pop()
 
 
+# Integration Request statuses that mean the gateway accepted the payment. Stock GoCardless logs the request as
+# Queued before it calls the payments API and moves it to Authorized or Completed only when the API accepts the
+# payment; it leaves it Queued when the call raises (it swallows the error) and sets Failed or Cancelled when the
+# payment is refused. None of those three is a charge.
+CHARGED_STATUSES = ("Authorized", "Completed")
+
+
 def gateway_recorded_charge(pr) -> bool:
-	"""Frappe Payments controllers log every gateway transaction as an Integration Request against the
-	Payment Request (stock GoCardless does so before it calls the payments API)."""
+	"""Whether the gateway accepted a payment for the Payment Request: Frappe Payments controllers log each
+	gateway transaction as an Integration Request against it and move it to Authorized or Completed when the
+	gateway accepts the payment."""
 	return bool(
 		frappe.db.exists(
 			"Integration Request",
-			{"reference_doctype": "Payment Request", "reference_docname": pr.name},
+			{
+				"reference_doctype": "Payment Request",
+				"reference_docname": pr.name,
+				"status": ("in", CHARGED_STATUSES),
+			},
 		)
 	)
 
@@ -150,17 +162,20 @@ def submit_and_notify(pr) -> None:
 	the one call, with the e-mail held back by flags.mute_email until the outcome is known.
 
 	A payment URL means the customer pays by link (Stripe and other redirect gateways, or GoCardless without a
-	mandate): the app sends the e-mail and the Communication core would have sent. No URL and an Integration
-	Request for the request means the gateway took the payment: Mute Email is set. No URL and no Integration
-	Request means payment_gateway_validation returned False without a recorded charge, which is what it does
-	when the gateway check raises (it swallows every exception): the request stays submitted and unpaid (status
-	Requested, Mute Email off) and an Error Log plus a comment ask a human to collect it. It is not resubmitted,
-	so a gateway that charged without logging is never charged twice."""
+	mandate): the app sends the e-mail and the Communication core would have sent. A phone request (M-Pesa) was
+	sent to the customer's phone by before_submit and never e-mails: nothing to add. No URL and an Integration
+	Request in Authorized or Completed means the gateway took the payment: Mute Email is set. Anything else
+	means payment_gateway_validation returned False without a confirmed charge: the gateway check raised (it
+	swallows every exception), the payments API call failed, or the payment was refused. The request stays
+	submitted and unpaid (status Requested, Mute Email off) and an Error Log plus a comment ask a human to
+	check the gateway and collect it. It is not resubmitted, so the gateway is never called twice."""
 	pr.flags.mute_email = True
 	pr.submit()
 	if pr.payment_url:
 		pr.send_email()
 		pr.make_communication_entry()
+		return
+	if pr.payment_channel == "Phone":
 		return
 	if gateway_recorded_charge(pr):
 		pr.db_set("mute_email", 1)
@@ -168,8 +183,8 @@ def submit_and_notify(pr) -> None:
 	pr.add_comment(
 		"Comment",
 		_(
-			"Not charged: the payment gateway neither took the payment nor returned a payment link. "
-			"Check the gateway and the Error Log, then collect the payment manually."
+			"Payment not confirmed: the payment gateway neither confirmed a payment nor returned a payment "
+			"link. Check the payment in the gateway and the Error Log, then collect the payment manually."
 		),
 	)
 	frappe.log_error(
