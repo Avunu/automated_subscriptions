@@ -281,7 +281,7 @@ class AutoSubSubscription(BaseSubscription):
 		"""Credit-note cancellation is opt-in via the customer (anchored or consolidating) and the setting, and
 		only for subscriptions billed in advance: a postpaid sub ("End of the current subscription period") has
 		nothing prepaid to credit and needs core's prorated arrears invoice instead. Every other subscription
-		keeps core's cancellation (DECISIONS.md D-12)."""
+		keeps core's cancellation (docs/development/architecture.md D-12)."""
 		return (
 			self.party_type == "Customer"
 			and self.generate_invoice_at != "End of the current subscription period"
@@ -368,7 +368,7 @@ class AutoSubSubscription(BaseSubscription):
 		return super().process(posting_date)  # billed -> not due -> status maintenance only
 
 	def get_current_invoice(self):
-		"""The most recent invoice that bills this subscription: header link *or* a line link (DECISIONS.md D-10).
+		"""The most recent invoice that bills this subscription: header link *or* a line link (docs/development/architecture.md D-10).
 
 		The run-scoped guard stays first: for the rest of the process() call that put this sub's lines on the
 		consolidation sink, the sink *is* the current invoice (the runner's own doc copies only).
@@ -440,7 +440,7 @@ class AutoSubSubscription(BaseSubscription):
 		Lines without a period (pre-migration rows, stock header-only invoices) fall back to posting_date, i.e.
 		core's rule. Supplier subs go to core.
 
-		Deliberate stock-path deviation (DECISIONS.md D-10): a non-consolidating Customer sub billed at "Days
+		Deliberate stock-path deviation (docs/development/architecture.md D-10): a non-consolidating Customer sub billed at "Days
 		before the current subscription period" whose end_date makes the period final has a header posting_date
 		before the period start, so core re-bills that period on every later run inside its one-cycle window;
 		the line rule bills it once."""
@@ -467,7 +467,7 @@ class AutoSubSubscription(BaseSubscription):
 		profile = self._billing_profile()
 		if profile is not None:
 			# direct callers (cancel_subscription arrears); a no-op after process() realigned
-			self._realign_current_period()  # stub for periods stored before the anchor was set (DECISIONS.md Q-14)
+			self._realign_current_period()  # stub for periods stored before the anchor was set (docs/anchored-billing.md)
 		# core's get_items_from_plans takes no dates: stash the window create_invoice was given (metadata only on
 		# the stock path; the anchored factor and the per-line period read it via _billing_window)
 		self.flags.subscription_billing_window = (

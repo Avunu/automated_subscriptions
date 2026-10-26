@@ -1,7 +1,7 @@
 # Copyright (c) 2026, Avunu LLC and contributors
 # For license information, please see license.txt
 
-"""Invoice <-> subscription lookups (PR 4, DECISIONS.md D-10): header link OR line link, credit notes excluded,
+"""Invoice <-> subscription lookups (PR 4, docs/development/architecture.md D-10): header link OR line link, credit notes excluded,
 `Credit Note Issued` counts as paid, the current invoice is the one carrying this sub's latest line period,
 and the Sales Invoice mixin fans the status refresh out over every subscription an invoice bills.
 

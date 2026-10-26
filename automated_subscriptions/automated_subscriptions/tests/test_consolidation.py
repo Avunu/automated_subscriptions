@@ -377,7 +377,7 @@ class TestConsolidation(IntegrationTestCase):
 		"""The run-scoped guard protects the runner's own doc copies only. The delegating copy in process() and
 		every later daily run have no flag: with core's header-only get_current_invoice, sub[k>0] (and sub[0]
 		once a sibling's longer period has widened the sink's to_date) would be status-evaluated against the
-		wrong invoice and cancelled. The line-aware lookup (PR 4, DECISIONS.md D-10) sees the sink instead."""
+		wrong invoice and cancelled. The line-aware lookup (PR 4, docs/development/architecture.md D-10) sees the sink instead."""
 		today = self.GRACE_TODAY
 		a, b, a2, b2 = self._grace_scenario()
 
@@ -1267,7 +1267,7 @@ class TestConsolidation(IntegrationTestCase):
 	def test_stock_days_before_final_period_billed_once(self):
 		"""Non-consolidating, non-anchored customer, "Days before" with an end_date that makes the second period
 		final: core's header posting_date (trigger = start - N, outside the period) means core would re-bill that
-		period on every later run inside its one-cycle window; the line fallback bills it once (DECISIONS.md D-10).
+		period on every later run inside its one-cycle window; the line fallback bills it once (docs/development/architecture.md D-10).
 		Pinned dates: core requires end_date > start + one cycle, so the final period is the second one."""
 		start, end, today = "2026-03-10", "2026-04-20", "2026-04-05"
 		p2_start = "2026-04-10"  # P1 = 03-10..04-09, P2 = 04-10..04-20 (clamped by end_date, final)
