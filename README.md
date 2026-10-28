@@ -15,6 +15,7 @@ Subscription auto-billing for ERPNext: payment requests, anchors and proration
 [![Latest release](https://img.shields.io/github/v/release/Avunu/automated_subscriptions)](https://github.com/Avunu/automated_subscriptions/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](license.txt)
 [![Frappe v16](https://img.shields.io/badge/Frappe-v16-blue)](https://github.com/frappe/frappe/tree/version-16)
+[![Documentation](https://img.shields.io/badge/docs-docs.avunu.net-blue)](https://docs.avunu.net/automated-subscriptions/)
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/consolidated-invoice-dark.webp">
@@ -151,6 +152,7 @@ The full list, and the messages the app raises, are in [docs/troubleshooting.md]
 
 ## Support
 
+- Documentation: [docs.avunu.net/automated-subscriptions/](https://docs.avunu.net/automated-subscriptions/)
 - Bug reports and questions: [GitHub issues](https://github.com/Avunu/automated_subscriptions/issues)
 - E-mail: <mail@avu.nu>
 
