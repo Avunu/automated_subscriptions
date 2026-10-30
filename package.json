@@ -1,6 +1,6 @@
 {
 	"name": "automated-subscriptions",
-	"version": "0.0.1",
+	"version": "16.0.0",
 	"private": true,
 	"description": "Subscription auto-billing for ERPNext: payment requests, anchors and proration",
 	"license": "MIT",
