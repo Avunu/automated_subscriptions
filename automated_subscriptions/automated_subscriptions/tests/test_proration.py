@@ -15,7 +15,7 @@ from erpnext.accounts.doctype.subscription.test_subscription import (
 	reset_settings,
 )
 from frappe.tests import IntegrationTestCase
-from frappe.utils import add_days, add_to_date, flt, nowdate
+from frappe.utils import add_days, flt, nowdate
 
 from automated_subscriptions.automated_subscriptions.billing.anchor import Grid, period_end
 from automated_subscriptions.automated_subscriptions.billing.dates import as_date
@@ -41,6 +41,27 @@ YEAR_PLAN = "_Test AS Year Plan"
 MONTH_PLAN = "_Test Plan Name"  # 900 / Month, Fixed Rate, INR
 CORE_PRORATA = "erpnext.accounts.doctype.subscription.subscription.get_prorata_factor"
 BEGINNING = "Beginning of the current subscription period"
+
+
+# Stock monthly periods for starts on the 28th..31st and in February, pinned to core's arithmetic: core's
+# update_subscription_period sets each period's end to get_current_invoice_end(previous end + 1), i.e.
+# add_to_date(period start, months=1, days=-1), so a month-end clamp carries forward (01-31 -> 02-27, then
+# 02-28 -> 03-27) instead of re-reading start_date's day: start + 2 months - 1 day is NOT the second period's end.
+# start -> the first three periods as (start, end, start, end, start, end)
+MONTH_END_PERIODS = {
+	"2026-01-28": ("2026-01-28", "2026-02-27", "2026-02-28", "2026-03-27", "2026-03-28", "2026-04-27"),
+	"2026-01-29": ("2026-01-29", "2026-02-27", "2026-02-28", "2026-03-27", "2026-03-28", "2026-04-27"),
+	"2026-01-30": ("2026-01-30", "2026-02-27", "2026-02-28", "2026-03-27", "2026-03-28", "2026-04-27"),
+	"2026-01-31": ("2026-01-31", "2026-02-27", "2026-02-28", "2026-03-27", "2026-03-28", "2026-04-27"),
+	"2026-02-28": ("2026-02-28", "2026-03-27", "2026-03-28", "2026-04-27", "2026-04-28", "2026-05-27"),
+	"2028-02-29": ("2028-02-29", "2028-03-28", "2028-03-29", "2028-04-28", "2028-04-29", "2028-05-28"),
+	"2026-03-28": ("2026-03-28", "2026-04-27", "2026-04-28", "2026-05-27", "2026-05-28", "2026-06-27"),
+	"2026-03-29": ("2026-03-29", "2026-04-28", "2026-04-29", "2026-05-28", "2026-05-29", "2026-06-28"),
+	"2026-03-30": ("2026-03-30", "2026-04-29", "2026-04-30", "2026-05-29", "2026-05-30", "2026-06-29"),
+	"2026-03-31": ("2026-03-31", "2026-04-29", "2026-04-30", "2026-05-29", "2026-05-30", "2026-06-29"),
+	"2026-10-31": ("2026-10-31", "2026-11-29", "2026-11-30", "2026-12-29", "2026-12-30", "2027-01-29"),
+	"2026-12-31": ("2026-12-31", "2027-01-30", "2027-01-31", "2027-02-27", "2027-02-28", "2027-03-27"),
+}
 
 
 def invoice_for(sub):
@@ -239,14 +260,16 @@ class TestProration(IntegrationTestCase):
 
 	# ---- 9
 	def test_stock_path_untouched_and_uses_core_prorata(self):
-		start = nowdate()
-		sub = create_subscription(
-			start_date=start,
-			generate_invoice_at="End of the current subscription period",
-			submit_invoice=1,
-		)  # _Test Customer: no anchor
+		# pinned to a month-end start (the date this test first failed on when it used the real today): core
+		# chains each period from the previous one, so the second period is 11-30 -> 12-29, not start + 2 months
+		start, end = "2026-10-31", "2026-11-29"
+		with frozen_today(start):
+			sub = create_subscription(
+				start_date=start,
+				generate_invoice_at="End of the current subscription period",
+				submit_invoice=1,
+			)  # _Test Customer: no anchor
 		self.assertIsNone(sub._billing_profile())
-		end = add_to_date(start, months=1, days=-1)
 		self.assertEqual(as_date(sub.current_invoice_end), as_date(end))
 
 		# "End of the current subscription period" only fires at the period end (core can_generate_new_invoice:
@@ -255,8 +278,8 @@ class TestProration(IntegrationTestCase):
 		with frozen_today(end), patch(CORE_PRORATA, wraps=original) as m:
 			sub.process(posting_date=end)
 		m.assert_called()
-		self.assertEqual(m.call_args.args[0], end)
-		self.assertEqual(m.call_args.args[1], start)
+		self.assertEqual(as_date(m.call_args.args[0]), as_date(end))
+		self.assertEqual(as_date(m.call_args.args[1]), as_date(start))
 
 		invoice = invoice_for(sub)
 		self.assert_period(invoice, start, end)
@@ -267,8 +290,47 @@ class TestProration(IntegrationTestCase):
 		self.assertEqual(line.subscription_plan, MONTH_PLAN)
 		self.assertEqual(as_date(line.subscription_period_start), as_date(start))
 		self.assertEqual(as_date(line.subscription_period_end), as_date(end))
-		# stock period roll-over after billing
-		self.assert_current_period(sub, add_to_date(start, months=1), add_to_date(start, months=2, days=-1))
+		# stock period roll-over after billing: core's get_current_invoice_end(end + 1), i.e.
+		# add_to_date("2026-11-30", months=1, days=-1); add_to_date(start, months=2, days=-1) would be 12-30
+		self.assert_current_period(sub, "2026-11-30", "2026-12-29")
+
+	# ---- 9 (month ends)
+	@staticmethod
+	def core_month_chain(start, count):
+		"""`count` consecutive (start, end) periods from core's own Subscription.get_current_invoice_end (unbound,
+		so the app's override is bypassed), fed the state core's update_subscription_period gives it."""
+		scratch = create_subscription(start_date=start, do_not_save=True)
+		chain, period_start = [], start
+		for _ in range(count):
+			period_end = core_subscription.Subscription.get_current_invoice_end(scratch, period_start)
+			chain.append((as_date(period_start), as_date(period_end)))
+			scratch.current_invoice_start, scratch.current_invoice_end = period_start, period_end
+			period_start = add_days(period_end, 1)
+		return chain
+
+	def test_stock_path_month_end_periods_follow_core(self):
+		for start, dates in MONTH_END_PERIODS.items():
+			with self.subTest(start=start):
+				periods = [(as_date(s), as_date(e)) for s, e in zip(dates[::2], dates[1::2], strict=True)]
+				chain = self.core_month_chain(start, len(periods) + 1)
+				self.assertEqual(chain[:-1], periods)  # the pinned table is core's behaviour
+
+				# today = the third period's start: core's after_insert catch-up bills periods 1..3 and rolls to 4
+				with frozen_today(periods[2][0]):
+					sub = create_subscription(
+						start_date=start,
+						generate_invoice_at=BEGINNING,
+						submit_invoice=1,
+						days_until_due=15,
+						generate_new_invoices_past_due_date=1,
+					)  # _Test Customer: no anchor
+				self.assertIsNone(sub._billing_profile())
+				invoices = invoices_for(sub)
+				self.assertEqual(len(invoices), len(periods))
+				for invoice, (period_start, period_end) in zip(invoices, periods, strict=True):
+					self.assert_period(invoice, period_start, period_end)
+					self.assertEqual(invoice.items[0].rate, 900.0)  # prepaid: core factor = 1
+				self.assert_current_period(sub, *chain[-1])
 
 	# ---- 10
 	def test_core_prorata_factor_not_in_anchored_path(self):
