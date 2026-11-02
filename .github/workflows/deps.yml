@@ -4,8 +4,11 @@
 name: deps
 on:
   pull_request:
+  # Bring the bot PRs that are behind up to date.
+  push:
+    branches: [develop]
   schedule:
-    # Re-dispatch CI for bot PRs.
+    # Re-dispatch CI for bot PRs and bring them up to date.
     - cron: "0 9 * * *"
     # The weekly Python relock; passed as relock-cron below.
     - cron: "0 8 * * 1"
@@ -18,16 +21,20 @@ jobs:
       pull-requests: write
       actions: write
       checks: read
-    uses: Avunu/frappe-nix/.github/workflows/app-deps.yml@d9e2f8ff34b57c0eda699b1c69f707100f7cc4f3 # v2.0.0
+    uses: Avunu/frappe-nix/.github/workflows/app-deps.yml@f25d11aea55df79ac23c1bf2caf0d4c451e8ac42 # v2.2.0
     with:
       app: automated_subscriptions
       integration-branch: develop
       runs-on: '["self-hosted","nixos"]'
       nix-cache: ${{ vars.FRAPPE_NIX_CACHE || '' }}
       auto-merge: true
+      auto-merge-policy: all
+      update-branches: true
       merge-method: squash
       relock-cron: "0 8 * * 1"
     secrets:
       NIX_CACHE_TOKEN: ${{ secrets.FRAPPE_NIX_CACHE_TOKEN }}
       NIX_CACHE_READ_TOKEN: ${{ secrets.FRAPPE_NIX_CACHE_READ_TOKEN }}
       FETCH_TOKEN: ${{ secrets.FRAPPE_NIX_FETCH_TOKEN }}
+      APP_ID: ${{ vars.AVUNU_CI_APP_ID || secrets.AVUNU_CI_APP_ID }}
+      APP_PRIVATE_KEY: ${{ secrets.AVUNU_CI_PRIVATE_KEY }}
