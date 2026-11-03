@@ -225,8 +225,9 @@ def _issue_credit_notes(
 
 	by_invoice: dict[str, list[frappe._dict]] = {}
 	for row in lines:
-		row.factor, row.unused_days, row.total_days = unused_factor(row.pstart, row.pend, cancel_date)
-		if row.factor > 0:
+		factor, row.unused_days, row.total_days = unused_factor(row.pstart, row.pend, cancel_date)
+		row.factor = factor
+		if factor > 0:
 			by_invoice.setdefault(row["invoice"], []).append(row)
 
 	credit_notes = []
