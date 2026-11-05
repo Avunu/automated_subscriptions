@@ -179,11 +179,13 @@ class TestCreditNote(IntegrationTestCase):
 		self.assertEqual(as_date(row.subscription_period_end), as_date("2018-01-31"))
 		self.assertIn("15 of 31 days", row.description)
 
+		# core re-runs the original's set_status when a return against it is submitted: settled + credited
 		invoice.reload()
 		self.assertEqual(invoice.outstanding_amount, 0)
-		self.assertEqual(invoice.status, "Paid")
+		self.assertEqual(invoice.status, "Credit Note Issued")
 
 		sub.reload()
+		self.assertTrue(sub.is_paid(invoice))
 		self.assertEqual(sub.status, "Cancelled")
 		self.assertEqual(as_date(sub.cancelation_date), as_date("2018-01-16"))
 		self.assertEqual(sub.has_outstanding_invoice(), 0)
