@@ -22,7 +22,7 @@ from erpnext.accounts.doctype.subscription.test_subscription import (
 	reset_settings,
 )
 from frappe.tests import IntegrationTestCase
-from frappe.utils import add_months, add_to_date, nowdate
+from frappe.utils import add_days, add_months, add_to_date, nowdate
 
 from automated_subscriptions.automated_subscriptions.billing.dates import as_date
 from automated_subscriptions.automated_subscriptions.tests.utils import (
@@ -114,13 +114,19 @@ class TestLookups(IntegrationTestCase):
 
 	def consolidated_pair(self):
 		"""A (monthly, billed by after_insert) and B (quarterly, never billed on its own) on one submitted
-		invoice; the invoice's due date is its posting date (days_until_due 0, no payment terms)."""
+		invoice; the invoice's due date is its posting date (days_until_due 0, no payment terms). ERPNext counts
+		an invoice past due from the day after its due date (`overdue_day`), so status checks run on that day."""
 		a = self.make_sub(MONTH_PLAN, in_import=False)
 		b = self.make_sub(QUARTER_PLAN)
 		invoice = self.consolidate(a, b, QUARTER_PLAN, 20000)
 		self.assertEqual([d.subscription for d in invoice.items], [a.name, b.name])
 		self.assertEqual(as_date(invoice.due_date), as_date(invoice.posting_date))
 		return a, b, invoice
+
+	@staticmethod
+	def overdue_day(invoice):
+		"""The first day core's current_invoice_is_past_due() is true for `invoice`."""
+		return add_days(invoice.due_date, 1)
 
 	def statuses(self, *subs):
 		return [frappe.db.get_value("Subscription", sub.name, "status") for sub in subs]
@@ -130,20 +136,21 @@ class TestLookups(IntegrationTestCase):
 		a, b, invoice = self.consolidated_pair()
 		self.assertEqual(type(get_invoice(invoice.name)).__name__, "ExtendedSalesInvoice")
 
-		get_invoice(invoice.name).refresh_subscription_status()
-		self.assertEqual(self.statuses(a, b), ["Unpaid", "Unpaid"])
+		with frozen_today(self.overdue_day(invoice)):
+			get_invoice(invoice.name).refresh_subscription_status()
+			self.assertEqual(self.statuses(a, b), ["Unpaid", "Unpaid"])
 
-		payment = get_payment_entry("Sales Invoice", invoice.name, bank_account="_Test Bank - _TC")
-		payment.reference_no = "12345"
-		payment.reference_date = self.today
-		payment.submit()
-		self.assertEqual(frappe.db.get_value("Sales Invoice", invoice.name, "status"), "Paid")
-		self.assertEqual(self.statuses(a, b), ["Active", "Active"])
+			payment = get_payment_entry("Sales Invoice", invoice.name, bank_account="_Test Bank - _TC")
+			payment.reference_no = "12345"
+			payment.reference_date = self.today
+			payment.submit()
+			self.assertEqual(frappe.db.get_value("Sales Invoice", invoice.name, "status"), "Paid")
+			self.assertEqual(self.statuses(a, b), ["Active", "Active"])
 
-		payment.cancel()
-		self.assertNotEqual(frappe.db.get_value("Sales Invoice", invoice.name, "status"), "Paid")
-		for status in self.statuses(a, b):
-			self.assertIn(status, ("Unpaid", "Grace Period"))
+			payment.cancel()
+			self.assertNotEqual(frappe.db.get_value("Sales Invoice", invoice.name, "status"), "Paid")
+			for status in self.statuses(a, b):
+				self.assertIn(status, ("Unpaid", "Grace Period"))
 
 	# ---- 2
 	def issue_credit_note(self, invoice):
@@ -187,7 +194,8 @@ class TestLookups(IntegrationTestCase):
 		invoice.db_set("status", "Credit Note Issued")
 		for sub in (a, b):
 			self.assertEqual(sub.has_outstanding_invoice(), 0)
-			self.assertFalse(sub.current_invoice_is_past_due())
+			with frozen_today(self.overdue_day(invoice)):
+				self.assertFalse(sub.current_invoice_is_past_due())
 			self.assertTrue(sub.is_paid(sub.get_current_invoice()))
 		# control: core's rule counts both the original (status != Paid) and the return, and is_paid is False
 		self.assertEqual(BaseSubscription.has_outstanding_invoice(a), 2)
@@ -357,7 +365,8 @@ class TestLookups(IntegrationTestCase):
 	# ---- 7
 	def test_on_cancel_refreshes_all_subscriptions(self):
 		a, b, invoice = self.consolidated_pair()
-		get_invoice(invoice.name).refresh_subscription_status()
+		with frozen_today(self.overdue_day(invoice)):
+			get_invoice(invoice.name).refresh_subscription_status()
 		self.assertEqual(self.statuses(a, b), ["Unpaid", "Unpaid"])
 		modified = [frappe.db.get_value("Subscription", s.name, "modified") for s in (a, b)]
 
