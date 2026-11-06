@@ -7,6 +7,18 @@ app_publisher = "Avunu LLC"
 app_description = "Subscription auto-billing for ERPNext: payment requests, anchors and proration"
 app_email = "mail@avu.nu"
 app_license = "MIT"
+
+# Frappe's About dialog takes the logo from here. not_listed keeps the app off the apps screen.
+# app_logo_url would change the site's own logo.
+add_to_apps_screen = [
+	{
+		"name": "automated_subscriptions",
+		"logo": "/assets/automated_subscriptions/images/automated_subscriptions-logo.svg",
+		"title": "Automated Subscriptions",
+		"route": "/desk",
+		"has_permission": "automated_subscriptions.apps_screen.not_listed",
+	}
+]
 required_apps = ["erpnext", "payments"]
 
 # Fresh installs mark all patches as completed without running them (frappe/installer.py
