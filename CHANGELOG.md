@@ -1,5 +1,17 @@
 # Changelog
 
+## [16.1.0](https://github.com/Avunu/automated_subscriptions/compare/v16.0.0...v16.1.0) (2026-11-07)
+
+
+### Features
+
+* show the app's logo in the About dialog, on frappe-nix 2.4.0 ([#62](https://github.com/Avunu/automated_subscriptions/issues/62)) ([7a2a4ef](https://github.com/Avunu/automated_subscriptions/commit/7a2a4ef92c2aa31a9c689eecff71359f5faf6202))
+
+
+### Bug Fixes
+
+* type the credit-note factor as a float for ty 0.0.92 ([#54](https://github.com/Avunu/automated_subscriptions/issues/54)) ([9bf9563](https://github.com/Avunu/automated_subscriptions/commit/9bf9563c36f1c4644b8f2cc583c68e73d8124aa1))
+
 ## [16.0.0](https://github.com/Avunu/automated_subscriptions/compare/v0.0.1...v16.0.0) (2026-10-30)
 
 
