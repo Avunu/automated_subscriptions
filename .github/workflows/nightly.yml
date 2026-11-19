@@ -17,7 +17,7 @@ jobs:
       pull-requests: write
       actions: write
       issues: write
-    uses: Avunu/frappe-nix/.github/workflows/app-nightly.yml@c307026f9a273a7af4db36958188a72bd5377fe8 # v2.4.0
+    uses: Avunu/frappe-nix/.github/workflows/app-nightly.yml@d070093efbe7153c90e6e3cbba5d6c6028d0e005 # v2.9.2
     with:
       app: automated_subscriptions
       integration-branch: develop
