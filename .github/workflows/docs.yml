@@ -21,6 +21,6 @@ jobs:
   docs:
     permissions:
       contents: read # checkout
-    uses: Avunu/site-docs/.github/workflows/check-docs.yml@d00b0d9fafaed497c0b5801e92498edfde265ed7 # 2026-11-15
+    uses: Avunu/site-docs/.github/workflows/check-docs.yml@fd0f83b9bff27149371008e215e526ed1c261731 # v0.4.0
     with:
       path: automated-subscriptions
