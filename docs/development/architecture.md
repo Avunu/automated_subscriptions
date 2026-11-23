@@ -49,7 +49,7 @@ Pricing Rules overwrite an item's `rate` whenever the invoice's missing values a
 
 `AutoSubSalesInvoice.set_payment_schedule` turns the `datetime.date` posting date that ERPNext's `create_invoice` stamps into an ISO string before ERPNext builds the payment schedule. ERPNext's whitelisted `get_payment_term_details` declares `posting_date: str | None`, and without the conversion Frappe's type check refuses the date, so every subscription invoice of a customer with a **Payment Terms Template** fails with `FrappeTypeError`.
 
-`_enrich_items` stamps every Customer invoice line with its subscription, plan and billed period, and uses the **Service Identifier** as the description. The period goes into the app's own **Subscription Period Start** and **Subscription Period End**, not into ERPNext's service dates, because ERPNext clears those on every non-deferred line when it validates (D-01).
+`_enrich_items` stamps every Customer invoice line with its subscription, plan and billed period, and sets the description: the **Service Identifier** when the subscription has one, otherwise the description of the plan row the line bills. The period goes into the app's own **Subscription Period Start** and **Subscription Period End**, not into ERPNext's service dates, because ERPNext clears those on every non-deferred line when it validates (D-01).
 
 ## Consolidated billing
 
