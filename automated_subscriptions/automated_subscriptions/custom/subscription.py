@@ -2,6 +2,7 @@
 # For license information, please see license.txt
 
 import contextlib
+import html
 from typing import TYPE_CHECKING, cast
 
 import frappe
@@ -14,7 +15,7 @@ from frappe import _
 from frappe.model.meta import get_field_precision
 from frappe.query_builder.functions import Max, Min
 from frappe.types import DF
-from frappe.utils import add_days, add_to_date, cint, escape_html, flt, nowdate
+from frappe.utils import add_days, add_to_date, cint, escape_html, flt, nowdate, sanitize_html, strip_html
 from frappe.utils.data import DateTimeLikeObject
 
 from automated_subscriptions.automated_subscriptions.billing.anchor import (
@@ -127,6 +128,17 @@ def _date_key(value):
 	return as_date(value) if value else as_date("1900-01-01")
 
 
+def _row_description(plan) -> str | None:
+	"""The plan row's description as sanitized HTML, or None when the row is blank or has no such field.
+	Avunu adds the field to Subscription Plan Detail. The public app does not have it."""
+	text = str(getattr(plan, "description", None) or "")
+	# A cleared Text Editor still stores empty markup such as <div class="ql-editor"><p><br></p></div>,
+	# so blank means no visible text, not an empty string
+	if not html.unescape(strip_html(text)).strip():
+		return None
+	return sanitize_html(text)
+
+
 class AutoSubSubscription(BaseSubscription):
 	"""Mixin registered via extend_doctype_class; must derive from core Subscription directly.
 
@@ -208,16 +220,19 @@ class AutoSubSubscription(BaseSubscription):
 
 	def _enrich_items(self, plans, items):
 		"""Additive per-line metadata on both paths: subscription / plan links, the billed period and the
-		description from service_identifier. Purchase Invoice Item has none of these columns."""
+		description. The description is the subscription's service_identifier when it has one. Otherwise it
+		is the plan row's own description, so each line carries the text of the row it bills. Purchase
+		Invoice Item has none of these columns."""
 		if self.party_type != "Customer":
 			return items
 		start, end = self._billing_window()
-		description = escape_html(self.get("service_identifier") or "") or None
+		identifier = escape_html(self.get("service_identifier") or "") or None
 		for plan, item in zip(plans, items, strict=True):  # core appends exactly one item per plan row
 			item["subscription"] = self.name
 			item["subscription_plan"] = plan.plan
 			item["subscription_period_start"] = start
 			item["subscription_period_end"] = end
+			description = identifier or _row_description(plan)
 			if description:
 				item["description"] = description
 		return items

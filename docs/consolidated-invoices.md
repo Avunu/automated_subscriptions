@@ -23,7 +23,7 @@ It is off for every customer until you tick it, including customers that existed
 
 - One line for each plan of each subscription, in the order the subscriptions were created.
 - Each line's **Subscription** section records the **Subscription**, the **Subscription Plan**, and the **Subscription Period Start** and **Subscription Period End** that line bills. Subscriptions on one invoice can bill different periods: a stub and a full month, for example.
-- The line's description is the subscription's **Service Identifier** when it has one, and the item's description otherwise.
+- The line's description is the subscription's **Service Identifier** when it has one. Otherwise it is the description of the plan row the line bills, when that row has one, and the item's description when neither is set.
 - The header comes from the oldest subscription on the invoice. Its **From Date** and **To Date** cover every line's period.
 - An **Additional Discount Amount** set on the subscriptions is added up over the subscriptions, so the invoice takes off what separate invoices would have. A percentage applies to the whole invoice.
 
@@ -72,4 +72,4 @@ A consolidated invoice raises one Payment Request, through the gateway of its pl
 - It is a column of the Subscription list and one of its standard filters, and the Subscription search looks in it as well as in **Party**.
 - It becomes the description of the subscription's invoice lines, for every customer subscription, consolidated or not.
 
-On a consolidated invoice the identifier also keeps lines apart. ERPNext refuses two lines with the same item and description on one invoice unless **Allow same Item to be added multiple times in a transaction** is ticked in **Selling Settings**. Two subscriptions of the same plan with no identifier, or the same one, have identical lines, and the customer's billing fails. Give each subscription its own identifier, or tick that setting.
+On a consolidated invoice the identifier also keeps lines apart. ERPNext refuses two lines with the same item and description on one invoice unless **Allow same Item to be added multiple times in a transaction** is ticked in **Selling Settings**. Two subscriptions of the same plan with no identifier and no plan-row description, or with the same identifier, have identical lines, and the customer's billing fails. Give each subscription its own identifier, or describe each plan row, or tick that setting.
